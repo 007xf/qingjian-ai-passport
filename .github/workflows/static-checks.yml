@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Install image and serial test dependencies
+        run: python3 -m pip install --disable-pip-version-check -r tools/requirements-test.txt
+
       - name: Install verified actionlint
         run: |
           actionlint_bin="$(./tools/install-actionlint.sh "$RUNNER_TEMP/actionlint")"

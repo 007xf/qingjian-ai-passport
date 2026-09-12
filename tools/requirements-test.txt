@@ -1,0 +1,3 @@
+# Match the verified image conversion runtime used for release assets.
+Pillow==12.3.0
+pyserial==3.5
