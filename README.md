@@ -10,7 +10,7 @@ This is an independent community project developed with AI assistance. It is not
 
 - [Download the Mac app, firmware and checksums](https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.3.1)
 - [Source and issues](https://github.com/007xf/qingjian-ai-passport)
-- AI Passport community: submission link will be added after the moderation receipt is available; [community index](https://ai-passport.folotoy.cn/plays/).
+- AI Passport community: [project 328 / author review workspace](https://ai-passport.folotoy.cn/account/?project=328), revision 544, **pending moderation**; [public community index](https://ai-passport.folotoy.cn/plays/). A pending submission is not yet a public play page.
 - Version: **1.3.1, Mac build 10 — community preview**.
 
 ## Compatibility and installation

@@ -8,7 +8,7 @@
 
 - 源码与问题反馈：https://github.com/007xf/qingjian-ai-passport
 - Mac App、固件与校验文件：https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.3.1
-- AI Passport 社区玩法：提交审核后在此补充具体链接；当前入口 https://ai-passport.folotoy.cn/plays/
+- AI Passport 社区玩法：[项目 328 / 创作者审核工作台](https://ai-passport.folotoy.cn/account/?project=328)（作者登录可查看）；版本记录 544，**待审核，尚未公开**。[玩法社区](https://ai-passport.folotoy.cn/plays/)
 - 本次发行版本：1.3.1 / Mac 构建 10（社区测试版）
 
 ## 先看兼容范围
