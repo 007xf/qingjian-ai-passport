@@ -1,0 +1,22 @@
+{
+  "version": "1.3.1",
+  "mac_build": 10,
+  "target": "Apple Silicon macOS 14+",
+  "tested_os": "macOS 27.0 on development Mac",
+  "source_date": "2026-09-13",
+  "firmware_build": "PASS",
+  "firmware_app_bytes": 2332832,
+  "host_tests": "PASS",
+  "runtime_python_tests": 284,
+  "first_launch_defaults": "PASS",
+  "relocation_unicode_path": "PASS",
+  "empty_home_no_author_data": "PASS",
+  "runtime_native_dependencies": "PASS; all 48 executable/dependency files signed and required modules imported",
+  "signature": "ad-hoc; not notarized",
+  "device_scope": "Functional v1.3.0 firmware was physically verified and accepted by user, including USB/BLE, badge, selected agents, Cursor quota and fixed Dino. v1.3.1 changes first-use defaults; it was built and host-tested without flashing as a publishing step.",
+  "third_party_limits": [
+    "Cursor private client API may change",
+    "Gemini CLI only; native Gemini Mac not connected",
+    "Intel not supported; earlier macOS versions not physically tested"
+  ]
+}

@@ -1,0 +1,2 @@
+# Optional macOS transport. Includes platform-specific PyObjC/CoreBluetooth dependencies.
+bleak==3.0.2
