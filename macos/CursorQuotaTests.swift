@@ -11,6 +11,21 @@ import Foundation
         precondition(value.fresh(at: Date(timeIntervalSince1970: at / 1000)))
         precondition(!value.fresh(at: Date(timeIntervalSince1970: at / 1000 - 1)))
         precondition(!value.fresh(at: Date(timeIntervalSince1970: at / 1000 + 300)))
+        precondition(value.displayable(at: Date(timeIntervalSince1970: at / 1000 + 86400)), "Old readings remain visibly dated")
+        precondition(!value.displayable(at: Date(timeIntervalSince1970: at / 1000 - 1)), "Future clocks cannot become observations")
+        let codexRaw: [String: Any] = ["observed_utc_ms": at, "expires_utc_ms": at + 180000,
+            "source": "official_app_server", "w1_used_percent": 49, "w1_duration_min": 300,
+            "w1_reset_s": at / 1000 + 1000, "w2_used_percent": NSNull()]
+        let codex = CodexQuotaSnapshot(codexRaw)!
+        precondition(codex.windows.count == 1 && codex.windows[0].used == 49 && codex.windows[0].title == "5 小时窗口")
+        precondition(codex.fresh(at: Date(timeIntervalSince1970: at / 1000)))
+        precondition(!codex.fresh(at: Date(timeIntervalSince1970: at / 1000 + 180)))
+        precondition(codex.displayable(at: Date(timeIntervalSince1970: at / 1000 + 86400)))
+        precondition(!codex.displayable(at: Date(timeIntervalSince1970: at / 1000 - 1)))
+        for invalid in [true as Any, 101, -1, Double.nan] {
+            var bad = codexRaw; bad["w1_used_percent"] = invalid
+            precondition(CodexQuotaSnapshot(bad) == nil)
+        }
         for (key, invalid) in [("cursor_used_percent", true as Any), ("cursor_used_percent", Double.nan),
                                ("other_used_percent", 101.0), ("other_used_percent", -1.0),
                                ("source", "invented"), ("expires_at_ms", at + 300_001), ("observed_at_ms", false)] {

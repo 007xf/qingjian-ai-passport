@@ -9,6 +9,16 @@
 typedef struct {
     int battery_soc;
     int battery_mv;
+    bool battery_gauge_attached;
+    int battery_gauge_version;
+    int battery_gauge_mode;
+    int battery_profile_flag;
+    int battery_profile_matches;
+    int battery_profile_blank;
+    uint32_t battery_profile_fingerprint;
+    unsigned battery_wake_count;
+    unsigned battery_profile_init_count;
+    int battery_read_error;
     bool screen_on;
     bool time_synced;
     int64_t utc_ms;

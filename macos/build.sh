@@ -88,7 +88,7 @@ cp "$REPO_DIR/assets/fonts/QingjianNotoSans-Regular.ttf" "$RESOURCES/Fonts/Qingj
 cp "$REPO_DIR/assets/fonts/OFL.txt" "$RESOURCES/Fonts/NotoSansSC-OFL.txt"
 cp "$REPO_DIR/assets/fonts/passport-supported-characters.txt" "$RESOURCES/Backend/"
 cp "$REPO_DIR/assets/badge-layout.json" "$RESOURCES/badge-layout.json"
-for module in bridge ble serial providers activity sources cursor; do
+for module in bridge ble serial providers activity sources cursor cursor_tokens service; do
   cp "$REPO_DIR/tools/passport_$module.py" "$RESOURCES/Backend/"
 done
 cp "$REPO_DIR/tools/requirements-ble.txt" "$RESOURCES/Backend/"
@@ -161,7 +161,7 @@ for stage in range(3):
 for font in ("Montserrat-Medium.ttf", "QingjianNotoSans-Regular.ttf"):
     ImageFont.truetype(str(resources / "Fonts" / font), 14)
 sys.path.insert(0, str(resources / "Backend"))
-for name in ("bridge", "ble", "serial", "providers", "activity", "sources", "cursor"):
+for name in ("bridge", "ble", "serial", "providers", "activity", "sources", "cursor", "cursor_tokens", "service"):
     importlib.import_module("passport_" + name)
 print("Output runtime, backend, images and fonts: PASS")
 PY

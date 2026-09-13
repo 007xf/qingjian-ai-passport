@@ -86,6 +86,14 @@ static uint32_t s_generation = 1;
 static bool s_input_lost, s_storage_ok;
 static char s_notice[64] = "Edit badge in the Mac app";
 static int s_battery_soc = -1, s_battery_mv = -1;
+static bsp_battery_diagnostics_t s_battery_diagnostics = {.version=-1, .mode=-1, .profile_flag=-1, .profile_matches=-1, .profile_blank=-1};
+typedef struct {
+    int soc, mv;
+    bsp_battery_diagnostics_t diagnostics;
+} battery_sample_t;
+/* Single latest-result slot, independent of the application command queue. */
+static battery_sample_t s_battery_sample;
+static bool s_battery_sample_pending;
 static int64_t s_token_updated_ms;
 static page_t s_page = PAGE_BADGE, s_return_page = PAGE_BADGE;
 static layer_t s_layer = LAYER_HOME;
@@ -185,7 +193,10 @@ static void update_status_ui(void) {
     }
     int64_t utc = 0;
     passport_clock_now(&s_clock, now_ms(), &utc);
-    passport_codex_view_update(&s_codex, utc, s_badge.tokens_known && !s_badge.tokens_stale, s_badge.tokens);
+    const passport_provider_snapshot_t *codex_usage = &s_providers[PASSPORT_PROVIDER_CODEX];
+    passport_codex_view_update(&s_codex, utc,
+        codex_usage->metric_kind == PASSPORT_PROVIDER_METRIC_TOKENS &&
+        passport_provider_metric_available(codex_usage, utc), codex_usage->metric_value);
     passport_cursor_view_update(&s_cursor, utc);
     passport_provider_view_update(s_providers, utc, passport_visible_features(&s_features, SUPPORTED_FEATURES));
 }
@@ -399,6 +410,16 @@ static void publish_status(void) {
     taskENTER_CRITICAL(&s_lock);
     s_status.battery_soc = s_battery_soc;
     s_status.battery_mv = s_battery_mv;
+    s_status.battery_gauge_attached = s_battery_diagnostics.attached;
+    s_status.battery_gauge_version = s_battery_diagnostics.version;
+    s_status.battery_gauge_mode = s_battery_diagnostics.mode;
+    s_status.battery_profile_flag = s_battery_diagnostics.profile_flag;
+    s_status.battery_profile_matches = s_battery_diagnostics.profile_matches;
+    s_status.battery_profile_blank = s_battery_diagnostics.profile_blank;
+    s_status.battery_profile_fingerprint = s_battery_diagnostics.profile_fingerprint;
+    s_status.battery_wake_count = s_battery_diagnostics.wake_count;
+    s_status.battery_profile_init_count = s_battery_diagnostics.profile_init_count;
+    s_status.battery_read_error = s_battery_diagnostics.error;
     s_status.screen_on = s_input.screen_on;
     s_status.feature_revision = s_features.revision;
     s_status.features_all = !s_features.custom;
@@ -440,7 +461,7 @@ void passport_get_status(passport_status_t *out) {
     const bool cursor_fresh = passport_cursor_snapshot_fresh(&cursor, out->utc_ms);
     out->cursor_quota_stale = out->cursor_quota_ready && !cursor_fresh;
     for (unsigned i = 0; i < 2; ++i) {
-        out->cursor_quota_known[i] = cursor_fresh && cursor.used_known[i];
+        out->cursor_quota_known[i] = passport_cursor_snapshot_display_known(&cursor, i);
         out->cursor_quota_used_percent[i] = out->cursor_quota_known[i] ? cursor.used_percent[i] : 0;
     }
 }
@@ -926,9 +947,25 @@ static void handle_input(passport_input_result_t input) {
     }
 }
 
+static void battery_worker(void *unused) {
+    (void)unused;
+    for (;;) {
+        battery_sample_t sample;
+        /* This task is the sole battery-driver owner. I2C may wait for its
+         * bounded timeout, but never holds application/LVGL locks. */
+        bsp_battery_sample_preserving_profile(&sample.soc, &sample.mv);
+        bsp_battery_get_diagnostics(&sample.diagnostics);
+        taskENTER_CRITICAL(&s_lock);
+        s_battery_sample = sample;
+        s_battery_sample_pending = true;
+        taskEXIT_CRITICAL(&s_lock);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
 static void app_worker(void *unused) {
     (void)unused;
-    int64_t last_battery = -5000, last_ui = -1000;
+    int64_t last_ui = -1000;
     rebuild();
     for (;;) {
         app_event_t event;
@@ -936,7 +973,15 @@ static void app_worker(void *unused) {
         taskENTER_CRITICAL(&s_lock);
         bool lost = s_input_lost;
         s_input_lost = false;
+        bool battery_changed = s_battery_sample_pending;
+        if (battery_changed) {
+            s_battery_soc = s_battery_sample.soc;
+            s_battery_mv = s_battery_sample.mv;
+            s_battery_diagnostics = s_battery_sample.diagnostics;
+            s_battery_sample_pending = false;
+        }
         taskEXIT_CRITICAL(&s_lock);
+        if (battery_changed) last_ui = -1000;
         if (lost) {
             passport_input_cancel(&s_input, now_ms());
             s_dino_input_lost = true;
@@ -1028,13 +1073,6 @@ static void app_worker(void *unused) {
          * otherwise a short click queued during a slow redraw could become LONG. */
         if (uxQueueMessagesWaiting(s_events) == 0)
             handle_input(passport_input_tick(&s_input, generation(), stamp));
-        if (stamp - last_battery >= 5000) {
-            /* I2C work never holds the LVGL lock and never runs in callbacks. */
-            s_battery_soc = bsp_battery_soc();
-            s_battery_mv = bsp_battery_mv();
-            last_battery = stamp;
-            last_ui = -1000;
-        }
         if (s_badge.tokens_known && !s_badge.tokens_stale && stamp - s_token_updated_ms >= TOKEN_TTL_MS) {
             taskENTER_CRITICAL(&s_lock);
             s_badge.tokens_stale = true;
@@ -1076,7 +1114,6 @@ bool passport_start(void) {
     passport_input_init(&s_input);
     s_status.battery_soc = s_status.battery_mv = -1;
     s_status.screen_on = true;
-    bsp_battery_init_readonly();
     s_events = xQueueCreate(24, sizeof(app_event_t));
     s_saves = xQueueCreate(1, sizeof(save_job_t *));
     if (!s_events || !s_saves) {
@@ -1098,6 +1135,16 @@ bool passport_start(void) {
         vQueueDelete(s_saves);
         s_events = s_saves = NULL;
         return false;
+    }
+    /* Create only after the two required workers have succeeded: there is no
+     * live battery task to clean up on earlier startup-failure paths. */
+    if (xTaskCreate(battery_worker, "passport_batt", 2560, NULL, 2, NULL) != pdPASS) {
+        taskENTER_CRITICAL(&s_lock);
+        s_battery_sample = (battery_sample_t){.soc=-1, .mv=-1,
+            .diagnostics={.version=-1, .mode=-1, .profile_flag=-1, .profile_matches=-1, .profile_blank=-1, .error=ESP_ERR_NO_MEM}};
+        s_battery_sample_pending = true;
+        taskEXIT_CRITICAL(&s_lock);
+        ESP_LOGW(TAG, "Battery worker unavailable; device communication remains active");
     }
     esp_err_t buttons = bsp_button_init(on_key, NULL);
     if (buttons != ESP_OK) ESP_LOGW(TAG, "Buttons unavailable: %s", esp_err_to_name(buttons));

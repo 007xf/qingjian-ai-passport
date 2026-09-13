@@ -244,16 +244,29 @@ final class PassportModel: ObservableObject {
     @Published var statusText = "连接 USB 后即可同步"
     @Published var lastError: String? = nil
     @Published var battery: Int? = nil
+    @Published var batteryStale = false
+    @Published var backgroundEnabled = false
+    @Published var backgroundRunning = false
+    @Published var backgroundKeepAwake = false
+    @Published var backgroundSyncInterval = 60
+    @Published var awakeAssertionActive = false
+    @Published var backgroundNotice = "后台同步尚未开启"
     @Published var screenOn = true
     @Published var deviceTime: TimeInterval? = nil
     @Published var lastSync: TimeInterval? = nil
     @Published var cycleTokens: Int64 = 0
+    @Published var codexCycleTokens: Int64? = nil
+    @Published var cursorMonthTokens: Int64? = nil
+    @Published var cursorMonthReset: TimeInterval? = nil
+    @Published var growthNotice = "等待读取 Codex 与 Cursor"
+    @Published var codexQuotaError: String? = nil
     @Published var lifetimeTokens: Int64 = 0
     @Published var stage = 0
     @Published var tokensKnown = false
     @Published var tokensStale = false
     @Published var codexDashboardAvailable = false
     @Published var codexQuotaReady = false
+    @Published var codexQuota: CodexQuotaSnapshot? = nil
     @Published var cursorQuota: CursorQuotaSnapshot? = nil
     @Published var cursorQuotaStatus = "尚未读取"
     @Published var dinoAvailable = false
@@ -278,6 +291,7 @@ final class PassportModel: ObservableObject {
     @Published private(set) var connection = ConnectionSettings()
     @Published var showConnectionSettings = false
     @Published var showSourcesSettings = false
+    @Published var showBackgroundSettings = false
     @Published private(set) var sourceSetup: [String: SourceSetupStatus] = [:]
     @Published private(set) var sourceSetupNotice: String? = nil
     @Published private(set) var bluetoothDevices: [BluetoothDevice] = []
@@ -290,6 +304,9 @@ final class PassportModel: ObservableObject {
     private var timer: Timer?
     private var loadedSavedConfig = false
     private var loadedDeviceConfig = false
+    private var checkedBackgroundStartup = false
+    private var backgroundPollInFlight = false
+    private var lastBackgroundSnapshot: Data?
     private let storage: URL
     private let state: URL
 
@@ -330,7 +347,7 @@ final class PassportModel: ObservableObject {
         if offline {
             statusText = "离线预览 · 可编辑并保存草稿，连接 USB 后可更新图片"
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.sync() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.refreshBackgroundStatus() }
             startAutomaticSync()
         }
     }
@@ -339,10 +356,84 @@ final class PassportModel: ObservableObject {
 
     private func startAutomaticSync() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            guard let self, !self.offline, !self.busy, !self.showConnectionSettings, !self.showSourcesSettings else { return }
-            self.sync(automatic: true)
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self, !self.offline, !self.busy else { return }
+            self.refreshBackgroundStatus()
         }
+    }
+
+    private func applyBackground(_ reply: [String: Any]) {
+        apply(reply)
+        backgroundEnabled = reply["enabled"] as? Bool ?? backgroundEnabled
+        backgroundRunning = reply["running"] as? Bool ?? false
+        backgroundKeepAwake = reply["keep_awake"] as? Bool ?? backgroundKeepAwake
+        if let value = integer(reply["sync_interval_seconds"]), [60, 3600].contains(value) {
+            backgroundSyncInterval = Int(value)
+        }
+        awakeAssertionActive = reply["awake_assertion_active"] as? Bool ?? false
+        connected = reply["connected"] as? Bool ?? false
+        batteryStale = reply["battery_stale"] as? Bool ?? !connected
+        if let at = (reply["last_success_at"] as? NSNumber)?.doubleValue, at > 0 { lastSync = at }
+        if let error = reply["error"] as? String, !error.isEmpty {
+            backgroundNotice = error
+        } else if connected {
+            backgroundNotice = "后台已连接，关闭窗口后继续同步"
+        } else if backgroundEnabled && backgroundRunning {
+            backgroundNotice = "正在等待设备，断线后自动重连"
+        } else {
+            backgroundNotice = backgroundEnabled ? "后台服务未运行" : "后台同步已关闭"
+        }
+        statusText = backgroundNotice
+    }
+
+    func refreshBackgroundStatus() {
+        guard !busy, !backgroundPollInFlight else { return }
+        run(["service-status"], label: "读取后台状态", quiet: true, affectsConnection: false) { [weak self] reply in
+            guard let self else { return }
+            var comparable = reply
+            comparable.removeValue(forKey: "status_age_seconds")
+            let fingerprint = try? JSONSerialization.data(withJSONObject: comparable, options: [.sortedKeys])
+            if fingerprint != self.lastBackgroundSnapshot {
+                self.lastBackgroundSnapshot = fingerprint
+                self.applyBackground(reply)
+            }
+            if !self.checkedBackgroundStartup {
+                self.checkedBackgroundStartup = true
+                if reply["configured"] as? Bool == false && self.connection.canConnect {
+                    self.enableBackground()
+                }
+            }
+        }
+    }
+
+    func enableBackground(thenSync: Bool = false) {
+        guard !busy else { return }
+        let command = ["service-enable", "--sync-interval", String(backgroundSyncInterval)] + (backgroundKeepAwake ? ["--keep-awake"] : [])
+        run(command, label: "正在开启后台同步", affectsConnection: false) { [weak self] reply in
+            guard let self else { return }
+            self.backgroundEnabled = true
+            self.applyBackground(reply)
+            if thenSync { self.sync() }
+        }
+    }
+
+    func disableBackground() {
+        guard !busy else { return }
+        run(["service-disable"], label: "正在关闭后台同步", affectsConnection: false) { [weak self] reply in
+            self?.applyBackground(reply)
+            self?.backgroundEnabled = false
+        }
+    }
+
+    func changeKeepAwake(_ enabled: Bool) {
+        backgroundKeepAwake = enabled
+        if backgroundEnabled { enableBackground() }
+    }
+
+    func changeSyncInterval(_ interval: Int) {
+        guard [60, 3600].contains(interval) else { return }
+        backgroundSyncInterval = interval
+        if backgroundEnabled { enableBackground() }
     }
 
     func connectDevice() {
@@ -356,7 +447,8 @@ final class PassportModel: ObservableObject {
         lastError = nil
         statusText = "正在连接\(connection.transport.title)工牌"
         startAutomaticSync()
-        sync()
+        if backgroundEnabled { sync() }
+        else { enableBackground(thenSync: true) }
     }
 
     var connectionLabel: String {
@@ -415,6 +507,12 @@ final class PassportModel: ObservableObject {
         guard !busy else { return }
         run(["cursor-usage"], label: "正在读取 Cursor 用量", affectsConnection: false) { [weak self] reply in
             self?.applyCursorQuota(reply["cursor_quota"])
+        }
+    }
+
+    func refreshCodexUsage() {
+        run(["tokens"], label: "正在读取 Codex 用量", affectsConnection: false) { [weak self] reply in
+            self?.applyUsage(reply["usage"] as? [String: Any] ?? reply)
         }
     }
 
@@ -638,11 +736,12 @@ final class PassportModel: ObservableObject {
     private func apply(_ reply: [String: Any]) {
         if let device = reply["status"] as? [String: Any] {
             connected = true
-            if let value = integer(device["battery_soc"]), value >= 0 { battery = Int(value) }
-            else { battery = nil }
+            if let value = integer(device["battery_soc"]), (0...100).contains(value) { battery = Int(value); batteryStale = false }
+            else { batteryStale = battery != nil }
             screenOn = device["screen_on"] as? Bool ?? true
             if let ms = integer(device["utc_ms"]), ms > 0 { deviceTime = Double(ms) / 1000 }
             if let known = device["tokens_known"] as? Bool { tokensKnown = known }
+            if let value = integer(device["stage"]), (0...2).contains(value) { stage = Int(value) }
             tokensStale = device["tokens_stale"] as? Bool ?? false
             codexDashboardAvailable = device["codex_dashboard_supported"] as? Bool ?? false
             providerDashboardAvailable = device["provider_dashboard_supported"] as? Bool ?? false
@@ -655,9 +754,15 @@ final class PassportModel: ObservableObject {
             }
         }
         if let usage = reply["usage"] as? [String: Any] { applyUsage(usage) }
+        if let service = reply["service"] as? [String: Any] {
+            connected = service["connected"] as? Bool ?? connected
+            batteryStale = service["battery_stale"] as? Bool ?? !connected
+            backgroundRunning = service["running"] as? Bool ?? backgroundRunning
+        }
     }
 
     private func applyUsage(_ usage: [String: Any]) {
+        if let raw = usage["codex_quota"] as? [String: Any] { codexQuota = CodexQuotaSnapshot(raw) }
         if usage.keys.contains("cursor_quota") { applyCursorQuota(usage["cursor_quota"]) }
         // Some local operations (for example reset-cycle) return no providers.
         // Keep their last observation only until its own expiry, never renew it.
@@ -667,36 +772,49 @@ final class PassportModel: ObservableObject {
         avatarSyncState = usage["avatar_sync"] as? String ?? ""
         avatarPendingUSBStages = (usage["avatar_pending_usb_stages"] as? [Int] ?? []).filter { (0...2).contains($0) }
         codexQuotaReady = usage["codex_quota_ready"] as? Bool ?? false
-        if let value = integer(usage["cycle_tokens"]) { cycleTokens = value; tokensKnown = true }
+        codexQuotaError = usage["quota_error"] as? String
+        let growthSources = usage["growth_sources"] as? [String: Any]
+        let codexTokens = growthSources?["codex"] as? [String: Any]
+        codexCycleTokens = integer(codexTokens?["cycle_tokens"] ?? usage["cycle_tokens"])
+        if let cursor = usage["cursor_quota"] as? [String: Any], let tokens = cursor["token_usage"] as? [String: Any] {
+            cursorMonthTokens = integer(tokens["cycle_tokens"])
+            cursorMonthReset = (tokens["reset_at_ms"] as? NSNumber).map { $0.doubleValue / 1000 }
+        }
+        if let value = integer(usage["growth_tokens"]) { cycleTokens = value; tokensKnown = true }
         else { cycleTokens = 0; tokensKnown = false }
+        tokensStale = usage["growth_status"] as? String == "stale"
+        growthNotice = usage["growth_ready"] as? Bool == true ? "Codex 当前周期 + Cursor 本月" :
+            tokensKnown ? "含上次读数 · 等待完整刷新" : "等待两项真实 Token 计数"
         if let value = integer(usage["lifetime_tokens"]) { lifetimeTokens = value }
-        stage = cycleTokens >= config.threshold2 ? 2 : cycleTokens >= config.threshold1 ? 1 : 0
+        if usage["growth_ready"] as? Bool == true {
+            stage = cycleTokens >= config.threshold2 ? 2 : cycleTokens >= config.threshold1 ? 1 : 0
+        }
         if let value = integer(usage["cycle_started_at"]) { cycleStart = Double(value) }
         if let value = integer(usage["weekly_resets_at"]) { weeklyReset = Double(value) }
         let verified = usage["account_verified"] as? Bool ?? false
-        sourceLabel = verified ? "本机 Codex 日志 · 账号已核验" : "本机 Codex 日志 · 账号未核验"
+        sourceLabel = verified ? "Codex 账号已核验 · Cursor 月度明细" : "Codex 等待核验 · Cursor 月度明细"
         if let coverage = usage["coverage"] as? [String: Any], coverage["cycle_scan_incomplete"] as? Bool == true {
             sourceLabel += " · 本周期仍在索引"
-            tokensKnown = false
-            cycleTokens = 0
-            stage = 0
         }
         let reset = usage["reset_source"] as? String ?? ""
-        cycleLabel = reset.contains("manual") ? "本周期始于手动重置卡记录" : "按每周额度重置分段"
+        cycleLabel = reset.contains("manual") ? "Codex 始于重置卡记录；Cursor 保持月周期" : "Codex 周期与 Cursor 月周期分别重置后相加"
     }
 
     private func run(_ command: [String], label: String, quiet: Bool = false, affectsConnection: Bool = true, success: @escaping ([String: Any]) -> Void) {
         guard !busy else { return }
+        let silentPoll = quiet && command.first == "service-status"
+        guard !silentPoll || !backgroundPollInFlight else { return }
         let transportCommand: [String]
         do { transportCommand = try connection.bridgeArguments(for: command) }
         catch { lastError = error.localizedDescription; showConnectionSettings = true; return }
-        busy = true
-        operation = label
+        if silentPoll { backgroundPollInFlight = true }
+        else { busy = true; operation = label }
         if !quiet { lastError = nil }
         let resources = Bundle.main.resourceURL!
         let python = resources.appendingPathComponent("Runtime/bin/python3").path
         let script = resources.appendingPathComponent("Backend/passport_bridge.py").path
         let statePath = state.path
+        let routed = backgroundEnabled && ["sync", "status", "upload", "screen", "pair", "reset-cycle", "tokens", "cursor-usage"].contains(command.first ?? "")
         bridgeQueue.async { [weak self] in
             var result: [String: Any] = [:]
             var failure: String?
@@ -704,7 +822,7 @@ final class PassportModel: ObservableObject {
                 let process = Process()
                 let pipe = Pipe()
                 process.executableURL = URL(fileURLWithPath: python)
-                process.arguments = [script, "--state-dir", statePath] + transportCommand
+                process.arguments = [script, "--state-dir", statePath] + (routed ? ["--via-service"] : []) + transportCommand
                 var environment = ProcessInfo.processInfo.environment
                 environment.removeValue(forKey: "PYTHONHOME")
                 environment.removeValue(forKey: "PYTHONPATH")
@@ -734,15 +852,21 @@ final class PassportModel: ObservableObject {
             let finalFailure = failure
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.busy = false
-                self.operation = ""
+                if silentPoll { self.backgroundPollInFlight = false }
+                else { self.busy = false; self.operation = "" }
+                // A poll started before a user action must not overwrite its
+                // progress or re-enable controls while that action is running.
+                if silentPoll && self.busy { return }
                 if let failure = finalFailure {
                     if affectsConnection {
                         self.connected = false
                         self.statusText = "\(self.connection.transport.title)工牌未连接"
                     }
                     if !quiet || self.lastError == nil { self.lastError = failure }
-                } else { self.lastError = nil; success(finalResult) }
+                } else {
+                    if !silentPoll { self.lastError = nil }
+                    success(finalResult)
+                }
             }
         }
     }
@@ -1018,11 +1142,11 @@ struct CursorUsageCard: View {
             HStack {
                 Text(title).font(.system(size: 12, weight: .medium))
                 Spacer()
-                Text(fresh ? used.map { String(format: "%.0f%% 已用", $0) } ?? "额度未知" : "等待更新")
+                Text(used.map { String(format: fresh ? "%.0f%% 已用" : "%.0f%% 已用 · 上次", $0) } ?? "额度未知")
                     .font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(fresh ? ink : muted)
-                    .help(fresh ? used.map { String(format: "已用 %.2f%% · 剩余 %.2f%%", $0, 100 - $0) } ?? "暂无数据" : "用量尚未读取或已过期")
+                    .help(used.map { String(format: "已用 %.2f%% · 剩余 %.2f%%", $0, 100 - $0) } ?? "暂无数据")
             }
-            ProgressView(value: fresh ? used ?? 0 : 0, total: 100).tint(accent)
+            ProgressView(value: used ?? 0, total: 100).tint(fresh ? accent : .orange)
         }
     }
 
@@ -1030,6 +1154,7 @@ struct CursorUsageCard: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let quota = model.cursorQuota
             let fresh = quota?.fresh(at: context.date) == true
+            let displayable = quota?.displayable(at: context.date) == true
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("Cursor 套餐用量").font(.system(size: 15, weight: .semibold))
@@ -1037,18 +1162,86 @@ struct CursorUsageCard: View {
                     if let quota { Text(quota.plan).font(.system(size: 11)).foregroundStyle(accent) }
                     Button("刷新用量") { model.refreshCursorUsage() }.buttonStyle(.bordered).controlSize(.small).disabled(model.busy)
                 }
-                meter("Cursor 模型", used: quota?.cursorUsed, fresh: fresh)
-                meter("其他模型", used: quota?.otherUsed, fresh: fresh)
+                meter("Cursor 模型", used: displayable ? quota?.cursorUsed : nil, fresh: fresh)
+                meter("其他模型", used: displayable ? quota?.otherUsed : nil, fresh: fresh)
                 HStack {
                     Text(quota.map { "重置 \(dateText($0.resetAt))" } ?? model.cursorQuotaStatus)
                     Spacer()
                     if let quota { Text("更新 \(dateText(quota.observedAt, seconds: true))") }
                 }.font(.system(size: 10)).foregroundStyle(muted)
                 if quota != nil && !fresh {
-                    Text("上次用量已过期，请刷新。额度比例不计入青子成长 Token。").font(.system(size: 10)).foregroundStyle(.orange)
+                    Text("保留上次读数 · 后台恢复连接后更新。成长使用真实 Token，不使用额度比例。").font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(panel, in: RoundedRectangle(cornerRadius: 12))
         }
+    }
+}
+
+struct CodexUsageCard: View {
+    @ObservedObject var model: PassportModel
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let quota = model.codexQuota
+            let fresh = quota?.fresh(at: context.date) == true
+            let displayable = quota?.displayable(at: context.date) == true
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Codex 剩余额度").font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Button("刷新用量") { model.refreshCodexUsage() }.buttonStyle(.bordered).controlSize(.small).disabled(model.busy)
+                }
+                if let quota, !quota.windows.isEmpty {
+                    ForEach(quota.windows) { window in
+                        VStack(alignment: .leading, spacing: 7) {
+                            let remaining = displayable ? window.used.map { 100 - $0 } : nil
+                            HStack {
+                                Text(window.title).font(.system(size: 12))
+                                Spacer()
+                                Text(remaining.map { String(format: fresh ? "%.0f%% 剩余" : "%.0f%% 剩余 · 上次", $0) } ?? "额度未知")
+                                    .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                            }
+                            ProgressView(value: remaining ?? 0, total: 100).tint(fresh ? accent : .orange)
+                            if window.reset > 0 { Text("重置 \(dateText(window.reset))").font(.system(size: 10)).foregroundStyle(muted) }
+                        }
+                    }
+                    Text("\(fresh ? "更新" : "上次更新") \(dateText(quota.observedAt, seconds: true))").font(.system(size: 10)).foregroundStyle(fresh ? muted : .orange)
+                } else { Text("尚未取得额度，等待后台读取。").font(.system(size: 11)).foregroundStyle(muted) }
+                if let error = model.codexQuotaError, !error.isEmpty {
+                    Text(error).font(.system(size: 10)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }.padding(16).background(panel, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+struct BackgroundSyncSheet: View {
+    @ObservedObject var model: PassportModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("后台同步").font(.system(size: 21, weight: .semibold))
+            Text("退出青笺后，后台仍会读取用量、保持连接并在断线后自动重连。图片和资料仍由你在青笺中编辑上传。").font(.system(size: 12)).foregroundStyle(muted)
+            HStack {
+                Text(model.backgroundEnabled ? "已开启" : "未开启").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button(model.backgroundEnabled ? "关闭后台同步" : "开启后台同步") {
+                    if model.backgroundEnabled { model.disableBackground() } else { model.enableBackground() }
+                }.buttonStyle(.bordered).disabled(model.busy)
+            }
+            Picker("自动同步频率", selection: Binding(get: { model.backgroundSyncInterval }, set: { model.changeSyncInterval($0) })) {
+                Text("每分钟一次").tag(60)
+                Text("每小时一次").tag(3600)
+            }.pickerStyle(.segmented).disabled(model.busy)
+            Text("只读取新增用量，静默更新；点击主界面的“同步”可立即刷新。").font(.system(size: 11)).foregroundStyle(muted)
+            Toggle("熄屏继续同步", isOn: Binding(get: { model.backgroundKeepAwake }, set: { model.changeKeepAwake($0) }))
+                .toggleStyle(.switch).disabled(model.busy)
+            Text("工牌连接时允许显示器熄屏，并保持 Mac 唤醒。工牌离线超过 90 秒后允许 Mac 正常休眠；重新连接后恢复。手动睡眠或合盖仍可能断开。").font(.system(size: 11)).foregroundStyle(muted)
+            if model.backgroundKeepAwake {
+                Text(model.awakeAssertionActive ? "当前为连接保持唤醒，会额外耗电" : "当前允许 Mac 正常休眠").font(.system(size: 11)).foregroundStyle(muted)
+            }
+            Text(model.backgroundNotice).font(.system(size: 11)).foregroundStyle(model.connected ? accent : muted)
+            if let error = model.lastError { Text(error).font(.system(size: 11)).foregroundStyle(.orange) }
+            HStack { Spacer(); Button("完成") { model.showBackgroundSettings = false }.buttonStyle(CyanButtonStyle()).keyboardShortcut(.defaultAction) }
+        }.padding(24).frame(width: 470).background(paper).foregroundStyle(ink).tint(accent).preferredColorScheme(.dark)
     }
 }
 
@@ -1126,6 +1319,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 21) {
                         identityEditor
                         featuresEditor
+                        if model.config.feature_all || model.config.feature_mask & 1 != 0 { CodexUsageCard(model: model) }
                         if model.config.feature_all || model.config.feature_mask & (1 << 1) != 0 {
                             CursorUsageCard(model: model)
                         }
@@ -1139,11 +1333,12 @@ struct ContentView: View {
         .background(paper).foregroundStyle(ink).tint(accent).preferredColorScheme(.dark)
         .sheet(isPresented: $model.showConnectionSettings) { ConnectionSheet(model: model) }
         .sheet(isPresented: $model.showSourcesSettings) { SourcesSheet(model: model) }
+        .sheet(isPresented: $model.showBackgroundSettings) { BackgroundSyncSheet(model: model) }
         .confirmationDialog("已在 Codex 使用重置卡？", isPresented: $model.showResetConfirmation, titleVisibility: .visible) {
             Button("已使用，开始新周期", role: .destructive) { model.resetCycle() }
             Button("取消", role: .cancel) { }
         } message: {
-            Text("这会记录新的用量周期，并从现在开始累计名牌成长。已有累计记录会保留；此按钮不会兑换或消耗实际重置卡。")
+            Text("这会从现在开始重新累计 Codex Token，Cursor 仍按原月度周期计数，再相加用于成长。已有记录会保留；此按钮不会兑换或消耗实际重置卡。")
         }
     }
 
@@ -1164,6 +1359,9 @@ struct ContentView: View {
             }.buttonStyle(.bordered).controlSize(.regular).disabled(model.busy)
             Button { model.openSourceSettings() } label: {
                 Label("数据源接入", systemImage: "link")
+            }.buttonStyle(.bordered).disabled(model.busy)
+            Button { model.showBackgroundSettings = true; model.refreshBackgroundStatus() } label: {
+                Label("后台同步", systemImage: "arrow.triangle.2.circlepath")
             }.buttonStyle(.bordered).disabled(model.busy)
             Button { model.connectDevice() } label: {
                 Label(model.offline ? "退出离线预览并连接" : model.connected ? "同步" : "连接设备", systemImage: model.connected ? "arrow.triangle.2.circlepath" : model.connection.transport == .bluetooth ? "antenna.radiowaves.left.and.right" : "cable.connector")
@@ -1210,7 +1408,7 @@ struct ContentView: View {
             }
             Spacer(minLength: 16)
             VStack(alignment: .leading, spacing: 8) {
-                deviceLine("电量", model.battery.map { "\($0)%" } ?? "—", "battery.75percent")
+                deviceLine("电量", model.battery.map { "\($0)%\(model.batteryStale ? " · 上次" : "")" } ?? "—", "battery.75percent")
                 deviceLine("设备时间", dateText(model.deviceTime), "clock")
                 deviceLine("屏幕", model.connected ? (model.screenOn ? "已亮屏" : "已熄屏") : "—", "display")
                 Text("快速连按3下 OK 熄屏，任意功能键唤醒。").font(.system(size: 10)).foregroundStyle(muted).padding(.top, 3)
@@ -1311,7 +1509,7 @@ struct ContentView: View {
 
     private var usagePanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(title: "本周期成长", note: "Token 累计")
+            SectionLabel(title: "成长用量", note: "Codex + Cursor")
             HStack(spacing: 12) {
                 LabeledInput(title: "一阶阈值", placeholder: "77777777", text: thresholdBinding(first: true))
                 LabeledInput(title: "二阶阈值", placeholder: "555555555", text: thresholdBinding(first: false))
@@ -1338,9 +1536,13 @@ struct ContentView: View {
             }
             Divider().padding(.vertical, 1)
             VStack(alignment: .leading, spacing: 5) {
+                Text(model.growthNotice).font(.system(size: 11, weight: .medium)).foregroundStyle(model.tokensStale ? .orange : accent)
+                Text("Codex 当前周期：\(model.codexCycleTokens.map(exactTokenText) ?? "未知") Token").font(.system(size: 10)).foregroundStyle(muted)
+                Text("Cursor 本月：\(model.cursorMonthTokens.map(exactTokenText) ?? "未知") Token").font(.system(size: 10)).foregroundStyle(muted)
                 Text(model.sourceLabel).font(.system(size: 10, weight: .medium))
                 Text("\(model.cycleLabel) · 开始 \(dateText(model.cycleStart))").font(.system(size: 10)).foregroundStyle(muted)
                 if model.weeklyReset != nil { Text("下次周额度重置：\(dateText(model.weeklyReset))").font(.system(size: 10)).foregroundStyle(muted) }
+                if model.cursorMonthReset != nil { Text("Cursor 月周期重置：\(dateText(model.cursorMonthReset))").font(.system(size: 10)).foregroundStyle(muted) }
             }
             HStack {
                 Text("每周期首次进入二阶时，名牌播放短暂变身。").font(.system(size: 10)).foregroundStyle(muted)

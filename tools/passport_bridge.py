@@ -16,6 +16,7 @@ import json
 import math
 import os
 from pathlib import Path
+import plistlib
 import select
 import shutil
 import sqlite3
@@ -25,6 +26,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from xml.parsers.expat import ExpatError
 import zlib
 
 MAX_JSON = 65536
@@ -355,14 +357,44 @@ def codex_auth_context(codex_home):
         return None
 
 
-def find_codex_cli(cli=None):
-    """Bounded discovery: explicit choice, standard App locations, then CLI."""
+def codex_app_cli(app):
+    """Identify Codex by its bundle ID, including user-renamed applications."""
+    candidate = app / "Contents/Resources/codex"
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        return None
+    try:
+        with (app / "Contents/Info.plist").open("rb") as stream:
+            raw = stream.read(MAX_JSON + 1)
+        if len(raw) > MAX_JSON:
+            return None
+        info = plistlib.loads(raw)
+        if isinstance(info, dict) and info.get("CFBundleIdentifier") == "com.openai.codex":
+            return str(candidate)
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError):
+        pass
+    return None
+
+
+def find_codex_cli(cli=None, app_roots=None):
+    """Bounded discovery: explicit choice, verified Codex app bundles, then CLI."""
     if cli:
         return str(Path(cli).expanduser())
-    for candidate in (Path.home() / "Applications/Codex.app/Contents/Resources/codex",
-                      Path("/Applications/Codex.app/Contents/Resources/codex")):
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+    roots = app_roots if app_roots is not None else (Path.home() / "Applications", Path("/Applications"))
+    for root in roots:
+        executable = codex_app_cli(root / "Codex.app")
+        if executable:
+            return executable
+    for root in roots:
+        try:
+            apps = sorted(root.glob("*.app"))
+        except OSError:
+            continue
+        for app in apps:
+            if app.name == "Codex.app":
+                continue
+            executable = codex_app_cli(app)
+            if executable:
+                return executable
     executable = shutil.which("codex")
     if executable:
         return executable
@@ -377,6 +409,14 @@ def app_server_quota(cli=None, deadline_seconds=12, codex_home=None):
     """Read only account/read and account/rateLimits/read; never expose identity."""
     executable = find_codex_cli(cli)
     environment = os.environ.copy()
+    # Finder/launchd may omit Homebrew from PATH. npm's Codex launcher uses
+    # /usr/bin/env node, so retain the existing lookup order and add its runtime.
+    search_paths = environment.get("PATH", os.defpath).split(os.pathsep)
+    for directory in (str(Path(executable).parent), "/opt/homebrew/bin", "/usr/local/bin",
+                      str(Path.home() / ".local/bin")):
+        if directory not in search_paths:
+            search_paths.append(directory)
+    environment["PATH"] = os.pathsep.join(search_paths)
     if codex_home is not None:
         environment["CODEX_HOME"] = str(Path(codex_home).expanduser().resolve())
     process = subprocess.Popen([executable, "app-server"], stdin=subprocess.PIPE,
@@ -873,7 +913,75 @@ def read_tokens(args, manual=False, config=None):
               "codex_quota_raw_used_percent": dashboard["raw_used_percent"],
               "reset_card_detection": "重置卡使用需在应用中明确确认；不会按已用百分比下降自动推断",
               "updated_at": time.time()}
+    result["codex_token_usage"] = codex_token_observation(result, counter.state_dir, scope_id)
     return result
+
+
+def _token_snapshot(value):
+    """Validate a source observation without replacing its source timestamp."""
+    if not isinstance(value, dict) or value.get("complete") is not True:
+        return None
+    count = value.get("cycle_tokens")
+    if not valid_count(count) or count > MAX_DEVICE_TOKENS:
+        return None
+    fields = ("cycle_start_ms", "reset_at_ms", "observed_at_ms", "expires_at_ms")
+    if any(type(value.get(key)) is not int for key in fields):
+        return None
+    start, reset, at, until = (value[key] for key in fields)
+    if not 1704067200000 <= start <= at < reset < 4102444800000 or not at < until <= min(at + 300000, reset):
+        return None
+    return value
+
+
+def codex_token_observation(result, counter_state, scope_id):
+    """Retain the last complete local-week count when a scan is incomplete."""
+    now = int(result.get("updated_at", time.time()) * 1000)
+    count, start, reset = result.get("cycle_tokens"), result.get("cycle_started_at"), result.get("weekly_resets_at")
+    snapshot = {"source": "codex_local", "cycle_tokens": count, "complete": True, "available": True,
+                "status": "fresh", "cycle_start_ms": int(start * 1000) if type(start) in (int, float) else 0,
+                "reset_at_ms": int(reset * 1000) if type(reset) in (int, float) else 0,
+                "observed_at_ms": now, "expires_at_ms": min(now + 180000, int(reset * 1000)) if type(reset) in (int, float) else 0,
+                "last_token_event_at_ms": int((result.get("last_token_event_at") or 0) * 1000),
+                "counting": "input including cached input + output", "error_code": None}
+    path = counter_state / ("13 Codex Token " + scope_id + ".json")
+    if _token_snapshot(snapshot) and not result.get("coverage", {}).get("cycle_scan_incomplete", False):
+        try:
+            atomic_json(path, snapshot)
+        except (OSError, ValueError):
+            snapshot["error_code"] = "cache_unwritable"
+        return snapshot
+    try:
+        old = _token_snapshot(load_json(path))
+    except (BridgeError, OSError, ValueError):
+        old = None
+    error = "cycle_scan_incomplete" if result.get("coverage", {}).get("cycle_scan_incomplete") else "cycle_unavailable"
+    if old:
+        return {**old, "available": False, "status": "stale", "error_code": error}
+    return {**snapshot, "cycle_tokens": None, "complete": False, "available": False,
+            "status": "unavailable", "observed_at_ms": 0, "expires_at_ms": 0, "error_code": error}
+
+
+def combine_growth(token_result, now_ms=None):
+    """Codex's own week/reset-card cycle + Cursor's own account billing month."""
+    now = time.time_ns() // 1_000_000 if now_ms is None else now_ms
+    cursor = (token_result.get("cursor_quota") or {}).get("token_usage") or {}
+    codex = token_result.get("codex_token_usage") or {}
+    sources = {"codex": codex, "cursor": cursor}
+    checked = [_token_snapshot(value) for value in sources.values()]
+    known = all(value is not None for value in checked)
+    total = sum(value["cycle_tokens"] for value in checked) if known else None
+    if total is not None and total > MAX_DEVICE_TOKENS:
+        total, known = None, False
+    fresh = known and all(value.get("available") is True and value["observed_at_ms"] <= now <
+                          min(value["expires_at_ms"], value["reset_at_ms"]) for value in checked)
+    token_result.update(growth_tokens=total, growth_ready=bool(fresh),
+                        growth_status="fresh" if fresh else "stale" if known else "partial" if any(checked) else "unavailable",
+                        growth_sources=sources,
+                        growth_observed_at_ms=min(value["observed_at_ms"] for value in checked) if known else 0,
+                        growth_scope="Codex 本周期 + Cursor 本月；含缓存输入，不等于账单金额")
+    first, final = thresholds(token_result)
+    token_result["stage"] = stage_for(total, first, final) if fresh else None
+    return token_result
 
 
 class Device:
@@ -1018,8 +1126,12 @@ def cycle_sync_marker(token_result, device_status):
             identifier = None
     else:
         identifier = None
-    return {"cycle_started_at": token_result.get("cycle_started_at"),
-            "account_hash": token_result.get("account_hash"), "device_id": identifier}
+    marker = {"cycle_started_at": token_result.get("cycle_started_at"),
+              "account_hash": token_result.get("account_hash"), "device_id": identifier}
+    cursor = (token_result.get("growth_sources") or {}).get("cursor") or {}
+    if token_result.get("growth_ready") is True and _token_snapshot(cursor):
+        marker.update(cursor_cycle_started_at_ms=cursor["cycle_start_ms"], cursor_account_hash=cursor.get("account_scope"))
+    return marker
 
 
 def cycle_reset_needed(previous, current):
@@ -1031,7 +1143,7 @@ def cycle_reset_needed(previous, current):
         return True
     # Migrate legacy port-based or unverified-identity markers without a fake reset.
     # Only a known, changed account/device is evidence of a different target.
-    for key in ("account_hash", "device_id"):
+    for key in ("account_hash", "device_id", "cursor_cycle_started_at_ms", "cursor_account_hash"):
         if previous.get(key) and current.get(key) and previous[key] != current[key]:
             return True
     return False
@@ -1120,9 +1232,17 @@ def sync_codex_dashboard(device, status, token_result):
 def collect_cursor_usage(state_dir, refresh=False):
     try:
         from passport_cursor import collect_cursor_quota
-        return collect_cursor_quota(Path(state_dir).expanduser(), refresh=refresh)
+        state = Path(state_dir).expanduser()
+        quota = collect_cursor_quota(state, refresh=refresh)
     except Exception:
         return {"available": False, "status": "unavailable", "error_code": "usage_unavailable"}
+    try:
+        from passport_cursor_tokens import collect_cursor_tokens
+        quota["token_usage"] = collect_cursor_tokens(state, quota=quota, refresh=refresh)
+    except Exception:
+        quota["token_usage"] = {"available": False, "complete": False, "cycle_tokens": None,
+                                "status": "unavailable", "error_code": "tokens_unavailable"}
+    return quota
 
 
 def cursor_quota_payload(snapshot):
@@ -1177,7 +1297,7 @@ def collect_provider_metadata(token_result, args):
             "metric_kind": "none", "metric_value": None, "metric_status": "unavailable",
             "metric_at_ms": 0, "last_activity_ms": 0, "model": "", "source": "none"
         } for name in ("codex", "cursor", "gemini")]
-    return token_result
+    return combine_growth(token_result)
 
 
 def sync_provider_dashboards(device, status, token_result):
@@ -1232,8 +1352,10 @@ def sync_device(device, token_result, config=None, prepared=None, reset_cycle=Fa
     if owns_settings and any(status.get(key) != value for key, value in expected_thresholds.items()):
         device.request(f"THRESHOLDS {first} {final}", "@AP THRESHOLDS_OK")
         device.wait_fields(expected_thresholds)
-    cycle_tokens = token_result.get("cycle_tokens")
-    known = valid_count(cycle_tokens) and cycle_tokens <= MAX_DEVICE_TOKENS and not token_result.get("coverage", {}).get("cycle_scan_incomplete", False)
+    combined = "growth_tokens" in token_result
+    cycle_tokens = token_result.get("growth_tokens" if combined else "cycle_tokens")
+    known = valid_count(cycle_tokens) and cycle_tokens <= MAX_DEVICE_TOKENS and \
+        (token_result.get("growth_ready") is True if combined else not token_result.get("coverage", {}).get("cycle_scan_incomplete", False))
     token_result.update(threshold1=first, threshold2=final,
                         stage=stage_for(cycle_tokens, first, final) if known else None)
     if known:
@@ -1247,6 +1369,13 @@ def sync_device(device, token_result, config=None, prepared=None, reset_cycle=Fa
         device.request(f"TOKENS {cycle_tokens}", "@AP TOKENS_OK")
         status = device.wait_fields({"tokens": cycle_tokens, "tokens_known": True,
                                      "stage": stage, **expected_thresholds, **expected_avatar})
+    elif combined:
+        # Leave the last device count and its observation time unchanged while
+        # one source is missing/stale. Never turn a failed sum into zero usage.
+        status = device.status()
+        token_result["growth_sync"] = "waiting_for_sources"
+        if owns_settings:
+            avatar_sync_report(status, None, prepared, token_result, "cycle_unknown")
     else:
         device.request("TOKENS UNKNOWN", "@AP TOKENS_OK")
         status = device.wait_fields({"tokens_known": False})
@@ -1274,6 +1403,63 @@ def upload_device(device, config, token_result, prepared=None, reset_cycle=False
     return status
 
 
+def execute_device_command(args, device=None, *, background=False, token_result=None):
+    """One serialized transaction; a service-owned transport remains open.
+
+    Background refresh never replays artwork, profile or feature uploads.
+    Only an explicit upload persists a newly confirmed device configuration.
+    """
+    owned = device is None
+    try:
+        state_dir = Path(args.state_dir).expanduser()
+        config_path = state_dir / "04 device config.json"
+        config = None
+        if args.command == "upload":
+            config = validate_config(load_json(Path(args.config)))
+        elif args.command == "sync":
+            saved_config = load_json(config_path)
+            if saved_config is not None:
+                config = validate_config(saved_config)
+        # Conversion and source reads finish before opening a device connection.
+        if args.command in ("sync", "upload") and token_result is None:
+            token_result = read_tokens(args, config=config)
+            collect_provider_metadata(token_result, args)
+        prepared = prepare_avatars(config, token_result, strict=not bool(args.ble_id)) if config and not background else None
+        marker_path = state_dir / "05 device sync.json"
+        previous_sync = load_json(marker_path, {}) if token_result else {}
+        device = device or (BLEDevice(args.ble_id) if args.ble_id else Device(args.port))
+        initial_status = device.status() if token_result else None
+        cycle_marker = cycle_sync_marker(token_result, initial_status) if token_result else {}
+        reset_cycle = bool(token_result and cycle_reset_needed(previous_sync, cycle_marker))
+        if args.command == "status":
+            status = device.status()
+        elif args.command == "screen":
+            device.request("SCREEN " + args.state, "@AP SCREEN_OK")
+            status = device.wait_fields({"screen_on": args.state == "1"})
+        elif args.command == "pair":
+            device.request("PAIR", "@AP PAIR_OK", timeout=10)
+            status = device.status()
+        elif args.command == "sync":
+            status = sync_device(device, token_result, None if background else config, prepared, reset_cycle)
+        else:
+            status = upload_device(device, config, token_result, prepared, reset_cycle)
+            # Text/settings are verified; pending stage images remain local
+            # selections until a USB session installs that active stage.
+            atomic_json(config_path, config)
+        if token_result and status.get("tokens_known") and not token_result.get("coverage", {}).get("cycle_scan_incomplete") and \
+                ("growth_ready" not in token_result or token_result.get("growth_ready") is True):
+            atomic_json(marker_path, cycle_marker)
+        result = {"ok": True, "port": device.port, "transport": getattr(device, "transport", "usb"), "status": status}
+        if args.command == "pair":
+            result["pairing"] = "requested"
+        if token_result:
+            result["usage"] = token_result
+        return result
+    finally:
+        if owned and device is not None:
+            device.close()
+
+
 def parser():
     parser = argparse.ArgumentParser(description="AI Passport 本地编辑器后端")
     transport = parser.add_mutually_exclusive_group()
@@ -1282,12 +1468,22 @@ def parser():
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE))
     parser.add_argument("--codex-home", default=os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
     parser.add_argument("--codex-cli")
+    parser.add_argument("--via-service", action="store_true", help="通过本机后台服务串行执行，不另开设备连接")
     parser.add_argument("--no-quota", action="store_true")
     parser.add_argument("--refresh-quota", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("tokens")
     commands.add_parser("sync")
+    service_enable = commands.add_parser("service-enable", help="启用登录后自动运行的本机同步服务")
+    service_enable.add_argument("--keep-awake", action="store_true", help="后台运行时防止闲置睡眠，显示器仍可熄屏")
+    service_enable.add_argument("--sync-interval", type=int, choices=(60, 3600), default=None,
+                                help="自动用量同步间隔（秒）；未指定时保留现有选择")
+    commands.add_parser("service-disable", help="停止后台同步并移除登录启动项")
+    commands.add_parser("service-status", help="读取后台同步快照，不连接设备")
+    service_run = commands.add_parser("service-run", help=argparse.SUPPRESS)
+    service_run.add_argument("--keep-awake", action="store_true")
+    service_run.add_argument("--sync-interval", type=int, choices=(60, 3600), default=None)
     commands.add_parser("sources-status", help="只读检查桌面/CLI活动接入，不连接工牌")
     setup = commands.add_parser("sources-configure", help="保留现有设置并配置官方活动回调")
     setup.add_argument("--provider", action="append", choices=("cursor", "gemini"), required=True)
@@ -1312,6 +1508,21 @@ def main():
     args = parser().parse_args()
     device = None
     try:
+        if args.command.startswith("service-") or args.via_service:
+            import passport_service
+            result = passport_service.dispatch(args)
+            print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+            return 0 if result.get("ok") else 1
+        # A prior editor version must not compete with an enabled background
+        # owner. Local activity/configuration utilities remain device-free.
+        try:
+            import passport_service
+        except ImportError:
+            passport_service = None
+        if passport_service is not None and passport_service.should_forward(args):
+            result = passport_service.dispatch(args)
+            print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+            return 0 if result.get("ok") else 1
         if args.command == "pair" and args.ble_id:
             raise BridgeError("首次蓝牙配对窗口只能通过可信 USB 请求，请先连接 USB")
         if args.command == "cursor-usage":
@@ -1348,53 +1559,12 @@ def main():
             result = read_tokens(args, manual=args.command == "reset-cycle")
             collect_provider_metadata(result, args)
         else:
-            state_dir = Path(args.state_dir).expanduser()
-            config_path = state_dir / "04 device config.json"
-            config = None
-            if args.command == "upload":
-                config = validate_config(load_json(Path(args.config)))
-            elif args.command == "sync":
-                saved_config = load_json(config_path)
-                if saved_config is not None:
-                    config = validate_config(saved_config)
-            # Conversion and source reads finish before opening a device connection.
-            token_result = read_tokens(args, config=config) if args.command in ("sync", "upload") else None
-            if token_result is not None:
-                collect_provider_metadata(token_result, args)
-            prepared = prepare_avatars(config, token_result, strict=not bool(args.ble_id)) if config else None
-            marker_path = state_dir / "05 device sync.json"
-            previous_sync = load_json(marker_path, {}) if token_result else {}
-            device = BLEDevice(args.ble_id) if args.ble_id else Device(args.port)
-            initial_status = device.status() if token_result else None
-            cycle_marker = cycle_sync_marker(token_result, initial_status) if token_result else {}
-            reset_cycle = bool(token_result and cycle_reset_needed(previous_sync, cycle_marker))
-            if args.command == "status":
-                status = device.status()
-            elif args.command == "screen":
-                device.request("SCREEN " + args.state, "@AP SCREEN_OK")
-                status = device.wait_fields({"screen_on": args.state == "1"})
-            elif args.command == "pair":
-                device.request("PAIR", "@AP PAIR_OK", timeout=10)
-                status = device.status()
-            elif args.command == "sync":
-                status = sync_device(device, token_result, config, prepared, reset_cycle)
-            else:
-                status = upload_device(device, config, token_result, prepared, reset_cycle)
-                # Text/settings are verified; pending stage images remain local
-                # selections until a USB session installs that active stage.
-                atomic_json(config_path, config)
-            if token_result and status.get("tokens_known") and not token_result.get("coverage", {}).get("cycle_scan_incomplete"):
-                atomic_json(marker_path, cycle_marker)
-            result = {"ok": True, "port": device.port, "transport": getattr(device, "transport", "usb"), "status": status}
-            if args.command == "pair":
-                result["pairing"] = "requested"
-            if token_result:
-                result["usage"] = token_result
+            result = execute_device_command(args)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
     except Exception as exc:
         # Never dump app-server payloads, serial buffers or local conversations.
-        message = str(exc) if isinstance(exc, BridgeError) else type(exc).__name__ + ": 操作失败，请检查本机文件与连接"
+        message = str(exc) if isinstance(exc, BridgeError) or type(exc).__name__ == "ServiceError" else type(exc).__name__ + ": 操作失败，请检查本机文件与连接"
         print(json.dumps({"ok": False, "error": message}, ensure_ascii=False))
         return 1
     finally:

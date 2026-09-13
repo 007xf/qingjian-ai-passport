@@ -160,9 +160,9 @@ void passport_codex_view_update(const passport_codex_snapshot_t *snapshot,
     const bool stale = observed && time_known && !future &&
                        (now_utc_ms >= snapshot->expires_utc_ms || reset_reached);
     const bool metadata_fresh = observed && time_known && !future && !stale;
-    const char *state = fresh ? "已更新" : stale ? "已过期" :
+    const char *state = fresh ? "已更新" : stale ? "上次 已过期" :
                         snapshot && !valid ? "数据异常" :
-                        observed && (!time_known || future) ? "时间未知" :
+                        observed && (!time_known || future) ? "上次 时间未知" :
                         observed ? "额度未知" : "未同步";
     text(s_view.state, state);
     lv_obj_set_style_text_color(s_view.state,
@@ -179,7 +179,7 @@ void passport_codex_view_update(const passport_codex_snapshot_t *snapshot,
             show(card->panel, true);
             duration_text(buffer, sizeof(buffer), window->duration_min);
             text(card->duration, buffer);
-            const bool known = fresh && window->used_known;
+            const bool known = passport_codex_snapshot_display_known(snapshot, i);
             if (known) {
                 const double remaining = 100.0 - (double)window->used_percent;
                 const unsigned tenths = (unsigned)(remaining * 10.0 + 0.5);

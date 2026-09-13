@@ -18,6 +18,9 @@ import Foundation
         }
         try verify(ble.bridgeArguments(for: ["ble-scan"]) == ["ble-scan"])
         let unpaired = ConnectionSettings(transport: .bluetooth)
+        for action in ["service-status", "service-enable", "service-disable"] {
+            try verify(unpaired.bridgeArguments(for: [action]) == [action])
+        }
         try verify(unpaired.bridgeArguments(for: ["sources-status"]) == ["sources-status"])
         try verify(unpaired.bridgeArguments(for: ["sources-configure", "--provider", "cursor"]) == ["sources-configure", "--provider", "cursor"])
         try verify(ble.bridgeArguments(for: ["reset-cycle", "--reason", "manual_reset_card"]) == ["reset-cycle", "--reason", "manual_reset_card"])

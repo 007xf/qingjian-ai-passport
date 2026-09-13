@@ -26,3 +26,8 @@ bool passport_codex_snapshot_fresh(const passport_codex_snapshot_t *s, int64_t n
         if (s->window[i].used_known && s->window[i].reset_s>0 && now>=s->window[i].reset_s*1000) return false;
     return true;
 }
+
+bool passport_codex_snapshot_display_known(const passport_codex_snapshot_t *s, unsigned index) {
+    return index < 2 && passport_codex_snapshot_valid(s) &&
+           s->observed_utc_ms > 0 && s->window[index].used_known;
+}

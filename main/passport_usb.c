@@ -105,6 +105,16 @@ static void status(void)
     cJSON_AddNumberToObject(o, "ble_pairing_result", ble.pairing_result);
     cJSON_AddNumberToObject(o, "battery_soc", s.battery_soc);
     cJSON_AddNumberToObject(o, "battery_mv", s.battery_mv);
+    cJSON_AddBoolToObject(o, "battery_gauge_attached", s.battery_gauge_attached);
+    cJSON_AddNumberToObject(o, "battery_gauge_version", s.battery_gauge_version);
+    cJSON_AddNumberToObject(o, "battery_gauge_mode", s.battery_gauge_mode);
+    cJSON_AddNumberToObject(o, "battery_profile_flag", s.battery_profile_flag);
+    cJSON_AddNumberToObject(o, "battery_profile_matches", s.battery_profile_matches);
+    cJSON_AddNumberToObject(o, "battery_profile_blank", s.battery_profile_blank);
+    cJSON_AddNumberToObject(o, "battery_profile_fingerprint", s.battery_profile_fingerprint);
+    cJSON_AddNumberToObject(o, "battery_wake_count", s.battery_wake_count);
+    cJSON_AddNumberToObject(o, "battery_profile_init_count", s.battery_profile_init_count);
+    cJSON_AddNumberToObject(o, "battery_read_error", s.battery_read_error);
     cJSON_AddBoolToObject(o, "screen_on", s.screen_on);
     cJSON_AddBoolToObject(o, "time_synced", s.time_synced);
     cJSON_AddNumberToObject(o, "utc_ms", (double)s.utc_ms);

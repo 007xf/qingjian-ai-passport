@@ -64,12 +64,14 @@ run_static_checks() {
     "${test_dir}/test_battery_readonly"
     python3 tests/test_verify_firmware.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_bridge.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_service.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_ble.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_serial.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_activity.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_providers.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_sources.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_cursor.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_cursor_tokens.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
 }

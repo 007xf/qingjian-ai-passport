@@ -13,11 +13,16 @@ int main(void) {
     assert(passport_codex_snapshot_fresh(&s, now));
     assert(!passport_codex_snapshot_fresh(&s, now-1));
     assert(!passport_codex_snapshot_fresh(&s, now+180000));
+    assert(passport_codex_snapshot_display_known(&s, 0));
+    assert(!passport_codex_snapshot_display_known(&s, 1));
+    assert(!passport_codex_snapshot_display_known(&s, 2));
     s.window[0].reset_s=now/1000+30;
     assert(passport_codex_snapshot_fresh(&s, now+29999));
     assert(!passport_codex_snapshot_fresh(&s, now+30000));
+    assert(passport_codex_snapshot_display_known(&s, 0)); /* Last cycle, visibly stale. */
     s.window[0].used_percent=NAN;
     assert(!passport_codex_snapshot_valid(&s));
+    assert(!passport_codex_snapshot_display_known(&s, 0));
     s.window[0].used_percent=100.01f;
     assert(!passport_codex_snapshot_valid(&s));
     s.window[0].used_percent=0;
@@ -27,6 +32,7 @@ int main(void) {
     s=(passport_codex_snapshot_t){.source="local_log"};
     assert(passport_codex_snapshot_valid(&s));
     assert(!passport_codex_snapshot_fresh(&s, now));
+    assert(!passport_codex_snapshot_display_known(&s, 0));
     s.window[1].used_known=true;
     assert(!passport_codex_snapshot_valid(&s));
     memset(s.source,'x',sizeof(s.source));

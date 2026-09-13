@@ -178,21 +178,89 @@ class CodexAccountIsolationTests(unittest.TestCase):
         binary.parent.mkdir(parents=True)
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o700)
+        (binary.parents[1] / "Info.plist").write_bytes(bridge.plistlib.dumps({"CFBundleIdentifier": "com.openai.codex"}))
         with mock.patch.object(bridge.Path, "home", return_value=self.root), \
                 mock.patch.object(bridge.shutil, "which", return_value="/old/codex") as which:
-            self.assertEqual(bridge.find_codex_cli(), str(binary))
+            self.assertEqual(bridge.find_codex_cli(app_roots=(self.root / "Applications",)), str(binary))
         which.assert_not_called()
 
     def test_codex_path_is_used_when_no_standard_app_exists(self):
         with mock.patch.object(bridge.Path, "is_file", return_value=False), \
                 mock.patch.object(bridge.shutil, "which", return_value="/custom/bin/codex"):
-            self.assertEqual(bridge.find_codex_cli(), "/custom/bin/codex")
+            self.assertEqual(bridge.find_codex_cli(app_roots=(self.root / "Applications",)), "/custom/bin/codex")
 
     def test_codex_missing_installation_has_actionable_error(self):
         with mock.patch.object(bridge.Path, "is_file", return_value=False), \
                 mock.patch.object(bridge.shutil, "which", return_value=None):
             with self.assertRaisesRegex(bridge.BridgeError, "未找到 Codex"):
-                bridge.find_codex_cli()
+                bridge.find_codex_cli(app_roots=(self.root / "Applications",))
+
+    def make_codex_app(self, root, name, bundle_id="com.openai.codex"):
+        app = root / name
+        binary = app / "Contents/Resources/codex"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o700)
+        (app / "Contents/Info.plist").write_bytes(bridge.plistlib.dumps({"CFBundleIdentifier": bundle_id}))
+        return binary
+
+    def test_renamed_codex_is_discovered_in_each_application_root(self):
+        for location in ("user", "system"):
+            with self.subTest(location=location):
+                root = self.root / location
+                binary = self.make_codex_app(root, "ChatGPT.app")
+                with mock.patch.object(bridge.shutil, "which", return_value="/old/codex") as which:
+                    self.assertEqual(bridge.find_codex_cli(app_roots=(root,)), str(binary))
+                which.assert_not_called()
+
+    def test_normal_chatgpt_and_misnamed_non_codex_bundle_are_not_selected(self):
+        root = self.root / "Applications"
+        self.make_codex_app(root, "ChatGPT.app", "com.openai.chat")
+        self.make_codex_app(root, "Codex.app", "com.example.other")
+        with mock.patch.object(bridge.shutil, "which", return_value="/fallback/codex"):
+            self.assertEqual(bridge.find_codex_cli(app_roots=(root,)), "/fallback/codex")
+
+    def test_verified_standard_codex_precedes_renamed_bundles(self):
+        user, system = self.root / "user", self.root / "system"
+        self.make_codex_app(user, "Renamed.app")
+        binary = self.make_codex_app(system, "Codex.app")
+        self.assertEqual(bridge.find_codex_cli(app_roots=(user, system)), str(binary))
+
+    def test_invalid_or_missing_bundle_identity_is_skipped(self):
+        root = self.root / "Applications"
+        binary = self.make_codex_app(root, "Codex.app")
+        info = binary.parents[1] / "Info.plist"
+        for data in (b"<plist>broken", b"not a plist", bridge.plistlib.dumps([])):
+            with self.subTest(data=data):
+                info.write_bytes(data)
+                with mock.patch.object(bridge.shutil, "which", return_value="/fallback/codex"):
+                    self.assertEqual(bridge.find_codex_cli(app_roots=(root,)), "/fallback/codex")
+        info.unlink()
+        self.assertIsNone(bridge.codex_app_cli(binary.parents[2]))
+
+    def test_gui_path_keeps_existing_order_and_adds_node_runtime_directories(self):
+        class StopProbe(Exception):
+            pass
+        original = "/chosen/node:/usr/bin:/bin"
+        with mock.patch.dict(bridge.os.environ, {"PATH": original}, clear=True), \
+                mock.patch.object(bridge.subprocess, "Popen", side_effect=StopProbe) as start:
+            with self.assertRaises(StopProbe):
+                bridge.app_server_quota("/custom/cli/codex")
+            self.assertEqual(bridge.os.environ["PATH"], original)
+        paths = start.call_args.kwargs["env"]["PATH"].split(bridge.os.pathsep)
+        self.assertEqual(paths[:3], original.split(bridge.os.pathsep))
+        self.assertIn("/custom/cli", paths)
+        self.assertIn("/opt/homebrew/bin", paths)
+        self.assertIn("/usr/local/bin", paths)
+
+    def test_child_path_does_not_duplicate_an_existing_homebrew_directory(self):
+        class StopProbe(Exception):
+            pass
+        with mock.patch.dict(bridge.os.environ, {"PATH": "/opt/homebrew/bin:/usr/bin"}, clear=True), \
+                mock.patch.object(bridge.subprocess, "Popen", side_effect=StopProbe) as start:
+            with self.assertRaises(StopProbe):
+                bridge.app_server_quota("/opt/homebrew/bin/codex")
+        self.assertEqual(start.call_args.kwargs["env"]["PATH"].split(bridge.os.pathsep).count("/opt/homebrew/bin"), 1)
 
     def test_symlink_or_malformed_auth_never_authorizes_cache_shortcut(self):
         auth = self.home / "auth.json"
@@ -712,6 +780,7 @@ class BLEIntegrationTests(unittest.TestCase):
                 output = io.StringIO()
                 with mock.patch.object(bridge.sys, "argv", args), \
                      mock.patch.object(bridge, "read_tokens", return_value=usage), \
+                     mock.patch.object(bridge, "collect_provider_metadata", side_effect=lambda value, args: value), \
                      mock.patch.object(bridge, "BLEDevice", return_value=device), \
                      mock.patch.object(bridge, "Device", side_effect=AssertionError("no USB")), \
                      mock.patch.object(bridge.sys, "stdout", output):
@@ -822,6 +891,7 @@ class BLEIntegrationTests(unittest.TestCase):
             args = ["bridge", "--state-dir", str(state), "--ble-id", self.identifier, "sync"]
             with mock.patch.object(bridge.sys, "argv", args), \
                  mock.patch.object(bridge, "read_tokens", return_value=usage), \
+                 mock.patch.object(bridge, "collect_provider_metadata", side_effect=lambda value, args: value), \
                  mock.patch.object(bridge, "BLEDevice", return_value=device), \
                  mock.patch.object(bridge, "Device", side_effect=AssertionError("no USB")), \
                  mock.patch.object(bridge.sys, "stdout", io.StringIO()):
@@ -830,6 +900,101 @@ class BLEIntegrationTests(unittest.TestCase):
             marker = json.loads((state / "05 device sync.json").read_text())
             self.assertEqual(marker["device_id"], "001122334455")
             self.assertNotIn("port", marker)
+
+
+class GrowthAccountingTests(unittest.TestCase):
+    NOW = 1789232000000
+
+    def source(self, count, start=None, **changes):
+        return {"cycle_tokens": count, "complete": True, "available": True, "status": "fresh",
+                "cycle_start_ms": self.NOW - 1000000 if start is None else start,
+                "reset_at_ms": self.NOW + 1000000, "observed_at_ms": self.NOW - 1000,
+                "expires_at_ms": self.NOW + 179000, **changes}
+
+    def result(self, codex=30, cursor=70):
+        return {"cycle_tokens": codex, "cycle_started_at": (self.NOW - 1000000) // 1000,
+                "threshold1": 50, "threshold2": 163885684,
+                "codex_token_usage": self.source(codex),
+                "cursor_quota": {"token_usage": self.source(cursor, start=self.NOW - 2000000)}}
+
+    def test_sum_uses_each_original_period_and_preserves_codex_independent_count(self):
+        value = bridge.combine_growth(self.result(), self.NOW)
+        self.assertEqual(value["cycle_tokens"], 30)
+        self.assertEqual(value["growth_tokens"], 100)
+        self.assertTrue(value["growth_ready"])
+        self.assertEqual(value["growth_sources"]["cursor"]["cycle_start_ms"], self.NOW - 2000000)
+        self.assertEqual(value["threshold2"], 163885684)
+        self.assertEqual(value["stage"], 1)
+
+    def test_stale_cursor_keeps_both_observations_and_does_not_promote(self):
+        value = self.result()
+        original = self.source(70, observed_at_ms=self.NOW - 300001, expires_at_ms=self.NOW - 1, available=False, status="stale")
+        value["cursor_quota"]["token_usage"] = original.copy()
+        bridge.combine_growth(value, self.NOW)
+        self.assertEqual(value["growth_tokens"], 100)
+        self.assertFalse(value["growth_ready"])
+        self.assertEqual(value["growth_status"], "stale")
+        self.assertIsNone(value["stage"])
+        self.assertEqual(value["growth_sources"]["cursor"], original)
+
+    def test_missing_source_is_not_a_fabricated_zero(self):
+        value = self.result(); value["cursor_quota"] = {}
+        bridge.combine_growth(value, self.NOW)
+        self.assertIsNone(value["growth_tokens"])
+        self.assertEqual(value["growth_status"], "partial")
+        self.assertEqual(value["growth_sources"]["codex"]["cycle_tokens"], 30)
+
+    def test_confirmed_zero_month_is_added_as_real_zero(self):
+        value = bridge.combine_growth(self.result(cursor=0), self.NOW)
+        self.assertEqual(value["growth_tokens"], 30)
+        self.assertTrue(value["growth_ready"])
+
+    def test_new_month_or_week_restarts_but_adding_cursor_to_legacy_marker_does_not(self):
+        value = bridge.combine_growth(self.result(), self.NOW)
+        current = bridge.cycle_sync_marker(value, {"device_id": "001122334455"})
+        legacy = {"cycle_started_at": value["cycle_started_at"], "device_id": "001122334455"}
+        self.assertFalse(bridge.cycle_reset_needed(legacy, current))
+        next_month = {**current, "cursor_cycle_started_at_ms": current["cursor_cycle_started_at_ms"] + 1000}
+        self.assertTrue(bridge.cycle_reset_needed(current, next_month))
+        self.assertTrue(bridge.cycle_reset_needed(current, {**current, "cycle_started_at": current["cycle_started_at"] + 1}))
+
+    def test_growth_device_sync_uses_sum_and_existing_device_threshold(self):
+        value = bridge.combine_growth(self.result(), self.NOW)
+        device = FakeDevice()
+        device.current.update(threshold1=50, threshold2=163885684)
+        bridge.sync_device(device, value)
+        self.assertIn(("TOKENS 100", "@AP TOKENS_OK"), device.calls)
+        self.assertNotIn(("TOKENS 30", "@AP TOKENS_OK"), device.calls)
+        self.assertEqual(device.current["threshold2"], 163885684)
+
+    def test_stale_growth_does_not_refresh_or_clear_device_last_observation(self):
+        value = self.result(); value["cursor_quota"]["token_usage"]["available"] = False
+        bridge.combine_growth(value, self.NOW)
+        device = FakeDevice(); device.current.update(tokens=999, tokens_known=True)
+        bridge.sync_device(device, value)
+        self.assertFalse(any(command.startswith("TOKENS") for command, _ in device.calls))
+        self.assertEqual(device.current["tokens"], 999)
+        self.assertEqual(value["growth_sync"], "waiting_for_sources")
+
+    def test_incomplete_codex_scan_retains_last_complete_count_and_original_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            value = {"cycle_tokens": 80, "cycle_started_at": (self.NOW - 1000000) / 1000,
+                     "weekly_resets_at": (self.NOW + 1000000) / 1000, "updated_at": self.NOW / 1000,
+                     "coverage": {"cycle_scan_incomplete": False}, "last_token_event_at": self.NOW / 1000 - 2}
+            first = bridge.codex_token_observation(value, state, "test-account")
+            value.update(cycle_tokens=90, updated_at=(self.NOW + 1000) / 1000, coverage={"cycle_scan_incomplete": True})
+            after = bridge.codex_token_observation(value, state, "test-account")
+        self.assertEqual(after["cycle_tokens"], 80)
+        self.assertEqual(after["observed_at_ms"], first["observed_at_ms"])
+        self.assertFalse(after["available"])
+        self.assertEqual(after["status"], "stale")
+
+    def test_invalid_or_overflow_sum_stays_unknown(self):
+        value = self.result(codex=bridge.MAX_DEVICE_TOKENS, cursor=1)
+        bridge.combine_growth(value, self.NOW)
+        self.assertIsNone(value["growth_tokens"])
+        self.assertFalse(value["growth_ready"])
 
 
 class AvatarCodecTests(unittest.TestCase):

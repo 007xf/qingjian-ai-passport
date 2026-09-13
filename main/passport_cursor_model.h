@@ -15,3 +15,7 @@ typedef struct {
 
 bool passport_cursor_snapshot_valid(const passport_cursor_snapshot_t *snapshot);
 bool passport_cursor_snapshot_fresh(const passport_cursor_snapshot_t *snapshot, int64_t now_utc_ms);
+
+/* Last valid observations remain displayable after expiry/reset. This does
+ * not claim freshness and never converts unknown values to zero. */
+bool passport_cursor_snapshot_display_known(const passport_cursor_snapshot_t *snapshot, unsigned index);

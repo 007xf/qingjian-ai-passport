@@ -23,7 +23,7 @@ struct ConnectionSettings: Codable, Equatable {
     // uses USB; a Bluetooth choice is never silently replaced with USB.
     func bridgeArguments(for command: [String]) throws -> [String] {
         guard let action = command.first else { throw ConnectionError("缺少设备操作。") }
-        if ["ble-scan", "reset-cycle", "tokens", "preview-avatar", "sources-status", "sources-configure", "cursor-usage"].contains(action) { return command }
+        if action.hasPrefix("service-") || ["ble-scan", "reset-cycle", "tokens", "preview-avatar", "sources-status", "sources-configure", "cursor-usage"].contains(action) { return command }
         if action == "pair" {
             guard transport == .usb else { throw ConnectionError("开启配对需要先通过 USB 连接工牌。") }
             return command

@@ -16,12 +16,17 @@ int main(void) {
     assert(!passport_cursor_snapshot_fresh(&s, now-1));
     assert(passport_cursor_snapshot_fresh(&s, now+299999));
     assert(!passport_cursor_snapshot_fresh(&s, now+300000));
+    assert(passport_cursor_snapshot_display_known(&s, 0));
+    assert(passport_cursor_snapshot_display_known(&s, 1));
+    assert(!passport_cursor_snapshot_display_known(&s, 2));
     s.reset_at_ms=now+10000;
     assert(passport_cursor_snapshot_fresh(&s, now+9999));
     assert(!passport_cursor_snapshot_fresh(&s, now+10000));
+    assert(passport_cursor_snapshot_display_known(&s, 0));
     s=baseline; s.used_percent[0]=0; s.used_percent[1]=100;
     assert(passport_cursor_snapshot_fresh(&s, now));
     s.used_known[0]=false;
+    assert(!passport_cursor_snapshot_display_known(&s, 0));
     assert(passport_cursor_snapshot_fresh(&s, now));
     s.used_known[1]=false;
     assert(passport_cursor_snapshot_valid(&s));
@@ -30,6 +35,7 @@ int main(void) {
     for (unsigned i=0; i<sizeof(invalid)/sizeof(invalid[0]); ++i) {
         s=baseline; s.used_percent[1]=invalid[i];
         assert(!passport_cursor_snapshot_valid(&s));
+        assert(!passport_cursor_snapshot_display_known(&s, 1));
     }
     s=baseline; s.expires_utc_ms=now+300001;
     assert(!passport_cursor_snapshot_valid(&s));

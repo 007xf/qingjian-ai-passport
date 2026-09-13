@@ -25,3 +25,8 @@ bool passport_cursor_snapshot_fresh(const passport_cursor_snapshot_t *s, int64_t
         (s->used_known[0] || s->used_known[1]) && now >= s->observed_utc_ms &&
         now < s->expires_utc_ms && (s->reset_at_ms == 0 || now < s->reset_at_ms);
 }
+
+bool passport_cursor_snapshot_display_known(const passport_cursor_snapshot_t *s, unsigned index) {
+    return index < 2 && passport_cursor_snapshot_valid(s) &&
+           s->observed_utc_ms > 0 && s->used_known[index];
+}

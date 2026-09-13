@@ -18,3 +18,7 @@ typedef struct {
 
 bool passport_codex_snapshot_valid(const passport_codex_snapshot_t *s);
 bool passport_codex_snapshot_fresh(const passport_codex_snapshot_t *s, int64_t now_utc_ms);
+
+/* Last valid observations remain displayable after expiry/reset. This does
+ * not claim freshness and never converts unknown values to zero. */
+bool passport_codex_snapshot_display_known(const passport_codex_snapshot_t *snapshot, unsigned index);

@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdbool.h>
+#include <string.h>
 
 static const char *TAG = "bsp_batt";
 
@@ -41,6 +42,11 @@ _Static_assert(sizeof(s_battery_profile) == CW_PROFILE_SIZE,
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_readonly;
+static bool s_profile_verified;
+static bool s_blank_init_failed;
+static bsp_battery_diagnostics_t s_diagnostics = {
+    .version = -1, .mode = -1, .profile_flag = -1, .profile_matches = -1, .profile_blank = -1
+};
 
 static int cw_read(uint8_t reg, uint8_t *buf, size_t n) {
     if (!s_dev) return -1;
@@ -145,28 +151,155 @@ static esp_err_t cw_attach(void) {
         s_dev = NULL;
         return ESP_ERR_NOT_FOUND;
     }
+    s_diagnostics.version = ver;
     ESP_LOGI(TAG, "检测到 CW2017 VERSION=0x%02X", ver);
     return ESP_OK;
 }
 
-esp_err_t bsp_battery_init_readonly(void) {
-    esp_err_t e = cw_attach();
-    if (e != ESP_OK) return e;
-    uint8_t mode = 0, alert = 0;
-    if (cw_read(CW_REG_CONFIG, &mode, 1) != 0 ||
-        cw_read(CW_REG_SOC_ALERT, &alert, 1) != 0) {
-        e = ESP_FAIL;
-    } else if (mode != CW_CONFIG_ACTIVE || !(alert & CW_UPDATE_FLAG)) {
-        ESP_LOGW(TAG, "Read-only gauge unavailable: inactive or missing profile");
-        e = ESP_ERR_INVALID_STATE;
-    } else {
-        s_readonly = true;
-        ESP_LOGI(TAG, "Read-only gauge attached; existing profile preserved");
-        return ESP_OK;
+/* UPDATE_FLAG is a host-owned reset marker, not a checksum. Read every
+ * byte even when that marker is zero; the equality decision uses the bytes,
+ * while the non-cryptographic fingerprint is diagnostic only. */
+static int cw_check_existing_profile(void) {
+    uint32_t fingerprint = UINT32_C(2166136261);
+    bool matches = true, blank = true;
+    s_diagnostics.profile_matches = s_diagnostics.profile_blank = -1;
+    s_diagnostics.profile_fingerprint = 0;
+    for (size_t i = 0; i < CW_PROFILE_SIZE; ++i) {
+        uint8_t value;
+        if (cw_read((uint8_t)(CW_REG_PROFILE + i), &value, 1) != 0) return -1;
+        matches = matches && value == s_battery_profile[i];
+        blank = blank && value == 0;
+        fingerprint = (fingerprint ^ value) * UINT32_C(16777619);
     }
-    i2c_master_bus_rm_device(s_dev);
-    s_dev = NULL;
+    s_diagnostics.profile_matches = matches ? 1 : 0;
+    s_diagnostics.profile_blank = blank ? 1 : 0;
+    s_diagnostics.profile_fingerprint = fingerprint;
+    return 0;
+}
+
+/* Cold gauges can present the reset defaults with no cell parameters. This
+ * board-specific exception initializes only a freshly verified all-zero bank.
+ * Never infer blankness from the fingerprint and never overwrite a nonempty
+ * foreign or interrupted profile. A failure consumes the one-attempt budget. */
+static esp_err_t cw_initialize_blank_profile(void) {
+    if (s_diagnostics.profile_init_count != 0) return ESP_ERR_INVALID_STATE;
+    uint8_t version, mode, alert;
+    if (cw_read(CW_REG_VERSION, &version, 1) != 0 ||
+        cw_read(CW_REG_CONFIG, &mode, 1) != 0 ||
+        cw_read(CW_REG_SOC_ALERT, &alert, 1) != 0 ||
+        cw_check_existing_profile() != 0) return ESP_FAIL;
+    if (version != 0xA0 || (mode != CW_CONFIG_SLEEP && mode != CW_CONFIG_RESTART) ||
+        (alert & CW_UPDATE_FLAG) || s_diagnostics.profile_blank != 1)
+        return ESP_ERR_INVALID_STATE;
+    s_diagnostics.profile_init_count++;
+    ESP_LOGW(TAG, "Verified blank CW2017: initialize supplied 520mAh board profile once");
+    if (cw_update_profile() != 0) return ESP_FAIL;
+    s_diagnostics.wake_count++;
+    if (cw_read(CW_REG_CONFIG, &mode, 1) != 0 ||
+        cw_read(CW_REG_SOC_ALERT, &alert, 1) != 0 ||
+        cw_check_existing_profile() != 0) return ESP_FAIL;
+    s_diagnostics.mode = mode;
+    s_diagnostics.profile_flag = (alert & CW_UPDATE_FLAG) != 0;
+    if (mode != CW_CONFIG_ACTIVE || !(alert & CW_UPDATE_FLAG) ||
+        s_diagnostics.profile_matches != 1) return ESP_FAIL;
+    return ESP_OK;
+}
+
+static esp_err_t cw_init_existing(bool allow_known_profile_wake) {
+    const bool previously_ready = s_dev && s_readonly && s_diagnostics.error == ESP_OK;
+    s_diagnostics.mode = s_diagnostics.profile_flag = -1;
+    s_diagnostics.profile_matches = s_diagnostics.profile_blank = -1;
+    s_diagnostics.profile_fingerprint = 0;
+    s_profile_verified = false;
+    esp_err_t e = cw_attach();
+    if (e == ESP_OK) {
+        uint8_t mode = 0, alert = 0;
+        const bool mode_ok = cw_read(CW_REG_CONFIG, &mode, 1) == 0;
+        const bool alert_ok = cw_read(CW_REG_SOC_ALERT, &alert, 1) == 0;
+        if (mode_ok) s_diagnostics.mode = mode;
+        if (alert_ok) s_diagnostics.profile_flag = (alert & CW_UPDATE_FLAG) != 0;
+        if (!mode_ok || !alert_ok) e = ESP_FAIL;
+        else if (mode != CW_CONFIG_ACTIVE || !(alert & CW_UPDATE_FLAG) || s_blank_init_failed) {
+            e = ESP_ERR_INVALID_STATE;
+            if (allow_known_profile_wake) {
+                if (cw_check_existing_profile() != 0) e = ESP_FAIL;
+                else if (s_diagnostics.profile_blank == 1 && s_diagnostics.version == 0xA0 &&
+                         (mode == CW_CONFIG_SLEEP || mode == CW_CONFIG_RESTART) &&
+                         !(alert & CW_UPDATE_FLAG)) {
+                    e = cw_initialize_blank_profile();
+                    s_blank_init_failed = e != ESP_OK;
+                    s_profile_verified = e == ESP_OK;
+                } else if (s_diagnostics.profile_matches == 1) {
+                    s_profile_verified = true;
+                    if (mode == CW_CONFIG_ACTIVE) e = ESP_OK;
+                    else if (s_diagnostics.version == 0xA0 &&
+                             (mode == CW_CONFIG_SLEEP || mode == CW_CONFIG_RESTART)) {
+                        /* CW2017 datasheet CONFIG 0x08: power-on F0 requires
+                         * 30 -> 00; this reloads the already-verified profile.
+                         * Keep SOC_ALERT and all 80 profile bytes untouched. */
+                        e = ESP_FAIL;
+                        s_diagnostics.wake_count++;
+                        if (cw_enter_active() == 0 &&
+                            cw_read(CW_REG_CONFIG, &mode, 1) == 0 &&
+                            cw_read(CW_REG_SOC_ALERT, &alert, 1) == 0) {
+                            s_diagnostics.mode = mode;
+                            s_diagnostics.profile_flag = (alert & CW_UPDATE_FLAG) != 0;
+                            if (cw_check_existing_profile() == 0 &&
+                                s_diagnostics.profile_matches == 1 && mode == CW_CONFIG_ACTIVE)
+                                e = ESP_OK;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    s_diagnostics.error = e;
+    if (e == ESP_OK) {
+        s_readonly = true;
+        s_blank_init_failed = false;
+        if (!previously_ready)
+            ESP_LOGI(TAG, "Gauge attached; existing profile and alerts preserved");
+    } else {
+        if (s_dev) i2c_master_bus_rm_device(s_dev);
+        s_dev = NULL;
+        s_readonly = false;
+        s_profile_verified = false;
+    }
+    s_diagnostics.attached = s_dev != NULL;
     return e;
+}
+
+esp_err_t bsp_battery_init_readonly(void) {
+    return cw_init_existing(false);
+}
+
+static esp_err_t cw_sample_existing(int *soc, int *mv, bool allow_known_profile_wake) {
+    if (soc) *soc = -1;
+    if (mv) *mv = -1;
+    esp_err_t e = cw_init_existing(allow_known_profile_wake);
+    if (e != ESP_OK) return e;
+    int read_soc = bsp_battery_soc();
+    int read_mv = bsp_battery_mv();
+    /* Immediately after wake the conversion registers may still be reset to
+     * zero. Do not expose that as a measured empty battery. */
+    if (read_mv == 0) read_soc = read_mv = -1;
+    if (soc) *soc = read_soc;
+    if (mv) *mv = read_mv;
+    if (read_soc < 0 || read_mv < 0) e = ESP_FAIL;
+    s_diagnostics.error = e;
+    return e;
+}
+
+esp_err_t bsp_battery_sample_readonly(int *soc, int *mv) {
+    return cw_sample_existing(soc, mv, false);
+}
+
+esp_err_t bsp_battery_sample_preserving_profile(int *soc, int *mv) {
+    return cw_sample_existing(soc, mv, true);
+}
+
+void bsp_battery_get_diagnostics(bsp_battery_diagnostics_t *out) {
+    if (out) *out = s_diagnostics;
 }
 
 esp_err_t bsp_battery_init(void) {
@@ -221,7 +354,7 @@ int bsp_battery_soc(void) {
         uint8_t mode = 0, alert = 0;
         if (cw_read(CW_REG_CONFIG, &mode, 1) != 0 ||
             cw_read(CW_REG_SOC_ALERT, &alert, 1) != 0 ||
-            mode != CW_CONFIG_ACTIVE || !(alert & CW_UPDATE_FLAG)) return -1;
+            mode != CW_CONFIG_ACTIVE || (!(alert & CW_UPDATE_FLAG) && !s_profile_verified)) return -1;
     }
     uint8_t b[2] = { 0 };
     if (cw_read(CW_REG_SOC_H, b, 2) != 0) return -1;

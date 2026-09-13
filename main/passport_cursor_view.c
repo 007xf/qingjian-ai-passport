@@ -92,10 +92,10 @@ void passport_cursor_view_update(const passport_cursor_snapshot_t *s, int64_t no
     const bool expired = clock_ok && (now >= s->expires_utc_ms ||
                                       (s->reset_at_ms > 0 && now >= s->reset_at_ms));
     const bool fresh = passport_cursor_snapshot_fresh(s, now);
-    text(s_view.plan, observed && !expired && s->plan[0] ? s->plan : "--");
+    text(s_view.plan, observed && s->plan[0] ? s->plan : "--");
     char buffer[80];
     for (unsigned i = 0; i < 2; ++i) {
-        const bool known = fresh && s->used_known[i];
+        const bool known = passport_cursor_snapshot_display_known(s, i);
         unsigned width = 0;
         if (known) {
             snprintf(buffer, sizeof(buffer), "%.1f%%", (double)s->used_percent[i]);
@@ -115,15 +115,15 @@ void passport_cursor_view_update(const passport_cursor_snapshot_t *s, int64_t no
         else snprintf(buffer, sizeof(buffer), "重置 %" PRIu64 "h %" PRIu64 "m", minutes / 60, minutes % 60);
     } else snprintf(buffer, sizeof(buffer), "%s", expired ? "等待同步" : "重置未知");
     text(s_view.reset, buffer);
-    text(s_view.state, fresh ? "套餐用量已更新" : expired ? "额度已过期，请同步" :
-         observed && !clock_ok ? "时间未知，请同步" : observed ? "额度未知" : "请在 Mac 中同步");
+    text(s_view.state, fresh ? "套餐用量已更新" : expired ? "上次读数，已过期" :
+         observed && !clock_ok ? "上次读数，时间未知" : observed ? "额度未知" : "请在 Mac 中同步");
     lv_obj_set_style_text_color(s_view.state, lv_color_hex(fresh ? PASSPORT_LAYOUT_COLOR_ACCENT :
         expired ? PASSPORT_LAYOUT_COLOR_WARNING : PASSPORT_LAYOUT_COLOR_SECONDARY), 0);
     if (clock_ok) {
         uint64_t seconds = (uint64_t)((now - s->observed_utc_ms) / 1000);
-        if (seconds < 60) snprintf(buffer, sizeof(buffer), "%" PRIu64 "s", seconds);
-        else if (seconds < 3600) snprintf(buffer, sizeof(buffer), "%" PRIu64 "m", seconds / 60);
-        else snprintf(buffer, sizeof(buffer), "%" PRIu64 "h", seconds / 3600);
+        if (seconds < 60) snprintf(buffer, sizeof(buffer), "%" PRIu64 "s前", seconds);
+        else if (seconds < 3600) snprintf(buffer, sizeof(buffer), "%" PRIu64 "m前", seconds / 60);
+        else snprintf(buffer, sizeof(buffer), "%" PRIu64 "h前", seconds / 3600);
     } else strcpy(buffer, "未同步");
     text(s_view.age, buffer);
 }
