@@ -27,7 +27,7 @@
   "portability_scope": "PASS: 1.4.0 packaged app relocated on development Mac; empty HOME/minimal PATH, bundled imports, nine backend-module/source correspondence, privacy and signature integrity checks. Other physical Macs remain untested.",
   "community_project_id": 328,
   "community_url": "https://ai-passport.folotoy.cn/plays/328/",
-  "community_status": "Previous approved release is public; new revision moderation status requires separate confirmation",
+  "community_status": "pending",
   "unverified": [
     "Other physical Macs",
     "All older supported macOS versions",
@@ -45,5 +45,12 @@
   "mac_zip_bytes": 48980555,
   "mac_zip_sha256": "d6892fc2e90bb11abb68d290e4ce6607fa0a8aa96c1324f2496558314cd01890",
   "relocation_unicode_path": "PASS",
-  "empty_home_no_author_data": "PASS"
+  "empty_home_no_author_data": "PASS",
+  "community_revision_id": 572,
+  "community_previous_approved_revision_id": 544,
+  "github_release_url": "https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.4.0",
+  "github_release_id": 387822091,
+  "character_skill": "qingjian-character-creator",
+  "skill_validation": "PASS; structure, bilingual templates and packaged reference links",
+  "remote_asset_sha256_validation": "PASS: 11 GitHub assets and community firmware, plus downloaded skill/full-firmware equality"
 }

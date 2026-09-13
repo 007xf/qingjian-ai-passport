@@ -15,7 +15,7 @@ This is an independent community project developed with AI assistance. It is not
 
 - [Download the Mac app, firmware and checksums](https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.4.0)
 - [Source and issues](https://github.com/007xf/qingjian-ai-passport)
-- [AI Passport community play 328](https://ai-passport.folotoy.cn/plays/328/). The previously approved release is public. Community review of a new version is separate from its GitHub release; check the version offered by the community before installing.
+- [AI Passport community play 328](https://ai-passport.folotoy.cn/plays/328/). Version 1.4.0 was submitted as revision **572** and is **pending review**. The previously approved release remains public; check the version offered by the community before installing.
 - Version: **1.4.0, Mac build 12 — community preview**.
 
 ## New in 1.4.0
