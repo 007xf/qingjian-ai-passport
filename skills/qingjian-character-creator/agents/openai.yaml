@@ -1,0 +1,4 @@
+interface:
+  display_name: "青笺角色创作"
+  short_description: "为青笺生成角色一致的三阶段透明立绘，保留认可的脸并检查清晰度"
+  default_prompt: "使用 $qingjian-character-creator，根据我的参考图制作青笺三阶段角色，保留角色特征与已认可的脸，交付透明 PNG 和可复用提示词。"

@@ -14,6 +14,8 @@ FoloToy AI Passport 是一个开放式可穿戴 AI 硬件，本仓库是这款 A
 
 Passport 工牌功能分支新增青笺 1.3.1 的 Cursor 账户额度和 Gemini 本地计数、具有来源依据的 Codex/Cursor/Gemini 活动状态，以及使用 Chromium 原版精灵的 Dino。Cursor 单独读取已登录账户额度，本地代码活动不换算为 Token；Gemini CLI 可用性仍有明确限制；Grok Bot 已从工牌移除，独立 Mac 应用保持原样，智能体概览只显示已启用的 AI 来源。详见[工牌实现与数据源边界](development/passport-os/README.zh_CN.md)。自定义图片更新仍限定 USB。
 
+Mac 连接更新、后台自动重连、用量合计与验证边界见[后台同步说明](qingjian-background-sync.zh_CN.md)。
+
 ## 硬件能力契约
 
 下表描述的是当前 `main` 已提供的应用能力，而不是芯片数据手册中所有可能的能力。

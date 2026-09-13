@@ -14,6 +14,8 @@ The repository is organized around the following principles:
 
 The Passport Badge feature branch adds Qingjian 1.3.1 Cursor account quota and Gemini local counters, source-backed Codex/Cursor/Gemini activity, and Chromium sprite-based Dino. Cursor quota is read independently from the signed-in account; local code activity is not converted into Tokens. Gemini CLI availability remains explicitly limited; Grok Bot has been removed from the badge while its separate Mac application is unchanged. The Agent overview only includes enabled AI sources; see the [badge implementation and source boundaries](development/passport-os/README.md). Custom artwork updates remain USB-only.
 
+See [background sync, reconnection and combined growth](qingjian-background-sync.md) for the Mac connection update and its validation limits.
+
 ## Hardware capability contract
 
 The table below describes the application capabilities implemented by the current `main` branch. It is not a list of everything that might be possible according to the chip datasheet.

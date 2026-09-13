@@ -1,22 +1,49 @@
 {
-  "version": "1.3.1",
-  "mac_build": 10,
+  "version": "1.4.0",
+  "mac_build": 12,
   "target": "Apple Silicon macOS 14+",
   "tested_os": "macOS 27.0 on development Mac",
   "source_date": "2026-09-13",
   "firmware_build": "PASS",
-  "firmware_app_bytes": 2332832,
+  "firmware_app_bytes": 2336816,
+  "firmware_full_bytes": 2402352,
+  "firmware_app_sha256": "e50a93bb54d9cb33c8bdf383ff4ed15a5d8aec3619543b97db8a86531f6997a1",
+  "firmware_full_sha256": "0b09d4bd4782cd8c5192258156d09aab9ae14abd7d84ba55e419976cd7186dc2",
   "host_tests": "PASS",
-  "runtime_python_tests": 284,
-  "first_launch_defaults": "PASS",
-  "relocation_unicode_path": "PASS",
-  "empty_home_no_author_data": "PASS",
-  "runtime_native_dependencies": "PASS; all 48 executable/dependency files signed and required modules imported",
+  "runtime_python_tests": 366,
+  "native_ui_tests": "PASS",
+  "runtime_native_dependencies": "PASS; bundled runtime imports and local signature integrity",
   "signature": "ad-hoc; not notarized",
-  "device_scope": "Functional v1.3.0 firmware was physically verified and accepted by user, including USB/BLE, badge, selected agents, Cursor quota and fixed Dino. v1.3.1 changes first-use defaults; it was built and host-tested without flashing as a publishing step.",
+  "device_scope": "1.4.0 firmware installed and battery recovered; saved settings and Dino best score preserved. Final Mac build connected over secured BLE with battery and complete growth readback. User confirmed updated Bluetooth connection validation.",
+  "background_without_editor": "PASS observed during this update",
+  "offline_idle_sleep_release": "PASS observed; release after 90-second disconnected grace period",
+  "sync_interval_seconds_default": 60,
+  "sync_interval_seconds_options": [
+    60,
+    3600
+  ],
+  "status_heartbeat_seconds": 30,
+  "editor_status_poll_seconds": 30,
+  "portability_scope": "PASS: 1.4.0 packaged app relocated on development Mac; empty HOME/minimal PATH, bundled imports, nine backend-module/source correspondence, privacy and signature integrity checks. Other physical Macs remain untested.",
+  "community_project_id": 328,
+  "community_url": "https://ai-passport.folotoy.cn/plays/328/",
+  "community_status": "Previous approved release is public; new revision moderation status requires separate confirmation",
+  "unverified": [
+    "Other physical Macs",
+    "All older supported macOS versions",
+    "All third-party account types",
+    "Long-duration memory and energy comparisons",
+    "Measured battery-life improvement",
+    "Continuous operation during manual or closed-lid system sleep"
+  ],
   "third_party_limits": [
-    "Cursor private client API may change",
+    "Cursor internal client API may change",
+    "Codex local logs are not a cross-device account Token total",
     "Gemini CLI only; native Gemini Mac not connected",
-    "Intel not supported; earlier macOS versions not physically tested"
-  ]
+    "Intel and iPhone unsupported"
+  ],
+  "mac_zip_bytes": 48980555,
+  "mac_zip_sha256": "d6892fc2e90bb11abb68d290e4ce6607fa0a8aa96c1324f2496558314cd01890",
+  "relocation_unicode_path": "PASS",
+  "empty_home_no_author_data": "PASS"
 }

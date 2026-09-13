@@ -24,6 +24,15 @@
 
 | 技能 | 功能 |
 | --- | --- |
+| [qingjian-character-creator](qingjian-character-creator/SKILL.zh_CN.md) | 角色工坊：根据用户参考图与可编辑提示词，准备三张透明角色 PNG，供青笺通过 USB 上传。 |
 | [issue-suggestions](issue-suggestions/SKILL.zh_CN.md) | 发布后，收集开发者的改进点，整理成提交到上游的功能建议 issue。 |
 | [experience-pr](experience-pr/SKILL.zh_CN.md) | 发布后，收集可复用的开发经验，并作为文档 PR 提交。 |
 | [plays-archive](plays-archive/SKILL.zh_CN.md) | 发布后，把已发布应用归档到上游 `plays/`，附 AI 生成的双语说明与封面图。 |
+
+## 安装角色工坊
+
+下载 [qingjian-character-creator.zip](https://github.com/007xf/qingjian-ai-passport/releases/download/v1.4.0/qingjian-character-creator.zip)，将解压得到的 `qingjian-character-creator` 文件夹放入 `~/.codex/skills/`，确认存在 `~/.codex/skills/qingjian-character-creator/SKILL.md`。若已有自行修改的同名技能，先保留原件再替换，然后新开 Codex 会话。
+
+使用 `$qingjian-character-creator`，附上自己的参考图，说明三阶段设计以及需要保留的特点。[提示词模板](qingjian-character-creator/references/character-prompts.zh_CN.md)也可单独复制修改。新建或修改图片需要可用的图像工具；没有时可使用自己提供的现成 PNG。技能不会在工牌上运行 AI，也不保证无需检查就能得到完美结果。
+
+将检查过的透明 PNG 分别放入青笺的对应阶段，按需设定进化门槛，再通过 USB 上传。完整流程及设备只缓存一张自定义图的限制见[项目说明](../README.zh_CN.md#角色工坊制作自己的三阶段形象)。
