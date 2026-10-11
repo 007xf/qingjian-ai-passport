@@ -2,9 +2,17 @@
 
 # Release validation
 
-## 1.5.0, Mac build 13 — source update
+## 1.5.0, Mac build 13 — community preview
 
-Claude Code adds local recorded Tokens, official status-line quota observations and an optional badge page. The new source must pass its own complete host gate, ESP-IDF 5.5.3 firmware build and packaged-Mac verification. These results and the new artifact hashes are recorded after those steps; the historical 1.4.0 results below do not certify this update. New physical-device and real-account acceptance is not yet claimed. See [Claude setup and source limits](qingjian-claude.md).
+- Build: PASS. Exact-source ESP-IDF 5.5.3 CI and protected-layout checks passed. Application: 2367872 bytes; merged image: 2433408 bytes. Native arm64/macOS 14+ build, 48 Mach-O signatures and app integrity checks passed.
+- Host tests: PASS. Complete static gate with 427 Python tests, all C model/protocol/storage/game/layout checks and Swift display/configuration/routing checks. All nine serial tests ran without skips.
+- Package: PASS. Archive relocation, bundled runtime imports, 13 source-identical Backend modules and anonymous Claude Token/quota fixtures passed. Release archives exclude account caches, copied credentials and device identity.
+- Device tests: NOT RUN. No new screen, USB/BLE or live-subscription acceptance is claimed for 1.5.0. Other Macs and supported older OS versions remain unverified. This is a community preview, signed ad hoc and not Apple-notarized.
+- Compiled source: `8280b1aa181caf418b93521ba8aca5f8b19b8326`; later release-record edits change documentation only. [Firmware CI](https://github.com/007xf/qingjian-ai-passport/actions/runs/38120921819).
+- Merged firmware: `qingjian-1.5.0-full.bin`, flash at `0x0`, SHA-256 `92bd8fad67309cb69f5a173855bfab3fbca5b8e4893f65fffcd0c1d8891c4f8d`.
+- Application-only firmware: `qingjian-1.5.0-app.bin`, flash at `0x10000`, SHA-256 `3bf354e235902c810b1ac6f9a20dd16838438c4b58feb2d921c706384217f58f`.
+- Mac archive: `qingjian-1.5.0-macos-arm64.zip`, 46405859 bytes, SHA-256 `da5550a4469be2095b04b3a40f9f42fa8b7f5215679d6960d8fbb2eca6912d6a`.
+
 
 ## Historical 1.4.0, Mac build 12
 

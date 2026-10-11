@@ -2,9 +2,17 @@
 
 # 发行验证
 
-## 1.5.0，Mac 构建 13 — 源码更新
+## 1.5.0，Mac 构建 13 — 社区测试版
 
-Claude Code 新增本机记录 Token、官方状态栏额度观测与可选工牌页。新版源码必须独立通过完整主机测试、ESP-IDF 5.5.3 固件构建与 Mac 成品验证，再记录这些结果及新版文件哈希；下方 1.4.0 的历史结果不能替本轮更新验收。目前尚无新增实机或真实账号验收声明。接入方法与来源限制见 [Claude 说明](qingjian-claude.zh_CN.md)。
+- Build：PASS。对应源码的 ESP-IDF 5.5.3 CI 与受保护布局检查通过。应用 2367872 字节，合并镜像 2433408 字节；arm64/macOS 14+ 编译、48 个 Mach-O 签名及 App 完整性检查通过。
+- Host tests：PASS。完整静态检查含 427 项 Python 测试、全部 C 模型／协议／存储／游戏／布局检查及 Swift 显示／配置／路由回归。9 项串口测试实际执行，无跳过。
+- 发行包：PASS。解压换路径、内置运行库导入、13 个 Backend 模块与源码逐文件一致、匿名 Claude Token／额度验证通过。公开包排除账户缓存、复制凭据和设备身份。
+- Device tests：NOT RUN。1.5.0 尚无新页面、USB／蓝牙或真实订阅账户验收；其他 Mac 和旧系统版本仍未验证。本版为社区测试版，使用本地临时签名，未经 Apple 公证。
+- 构建源码：`8280b1aa181caf418b93521ba8aca5f8b19b8326`；后续发行记录改动仅修改文档。[固件 CI](https://github.com/007xf/qingjian-ai-passport/actions/runs/38120921819)。
+- 合并固件：`qingjian-1.5.0-full.bin`，地址 `0x0`，SHA-256 `92bd8fad67309cb69f5a173855bfab3fbca5b8e4893f65fffcd0c1d8891c4f8d`。
+- 应用固件：`qingjian-1.5.0-app.bin`，地址 `0x10000`，SHA-256 `3bf354e235902c810b1ac6f9a20dd16838438c4b58feb2d921c706384217f58f`。
+- Mac 包：`qingjian-1.5.0-macos-arm64.zip`，46405859 字节，SHA-256 `da5550a4469be2095b04b3a40f9f42fa8b7f5215679d6960d8fbb2eca6912d6a`。
+
 
 ## 历史 1.4.0，Mac 构建 12
 
