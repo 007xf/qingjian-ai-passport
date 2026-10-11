@@ -1375,6 +1375,7 @@ class ProtocolTests(unittest.TestCase):
                 arguments = ["bridge", "--state-dir", str(root / "state"), "upload", "--config", str(config_path)]
                 usage = {"cycle_tokens": 42, "stage": 2, "cycle_started_at": 1000, "coverage": {"cycle_scan_incomplete": False}}
                 with mock.patch.object(bridge.sys, "argv", arguments), mock.patch.object(bridge, "read_tokens", return_value=usage), \
+                     mock.patch.object(bridge, "collect_claude_usage", return_value={}), \
                      mock.patch.object(bridge, "Device", return_value=device), mock.patch.object(bridge.sys, "stdout", io.StringIO()):
                     self.assertEqual(bridge.main(), 0 if success else 1)
                 saved = root / "state/04 device config.json"
@@ -1406,6 +1407,7 @@ class ProtocolTests(unittest.TestCase):
             usage = {"cycle_tokens": 42, "stage": 0, "cycle_started_at": 1000,
                      "coverage": {"cycle_scan_incomplete": False}}
             with mock.patch.object(bridge.sys, "argv", ["bridge", "--state-dir", str(root), "sync"]), \
+                 mock.patch.object(bridge, "collect_claude_usage", return_value={}), \
                  mock.patch.object(bridge, "read_tokens", return_value=usage), \
                  mock.patch.object(bridge, "Device", return_value=device), \
                  mock.patch.object(bridge.sys, "stdout", io.StringIO()):
@@ -1525,7 +1527,8 @@ class CursorQuotaBridgeTests(unittest.TestCase):
 class SourceSetupBridgeTests(unittest.TestCase):
     def test_status_is_local_even_with_a_bluetooth_selection(self):
         module = SimpleNamespace(source_status=mock.Mock(return_value={"ok": True, "sources": []}))
-        with mock.patch.dict("sys.modules", {"passport_sources": module}), \
+        with mock.patch.dict("sys.modules", {"passport_sources": module,
+                "passport_claude_setup": SimpleNamespace(source_status=mock.Mock(return_value={"provider": "claude"}))}), \
              mock.patch("sys.argv", ["bridge", "--ble-id", "unused", "sources-status"]), \
              mock.patch.object(bridge, "Device", side_effect=AssertionError("opened USB")), \
              mock.patch.object(bridge, "BLEDevice", side_effect=AssertionError("opened BLE")), \

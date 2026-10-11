@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 mode="${1:---all}"
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +48,14 @@ run_static_checks() {
         -o "${test_dir}/test_passport_cursor_model"
     "${test_dir}/test_passport_cursor_model"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_passport_claude_model.c main/passport_claude_model.c -lm \
+        -o "${test_dir}/test_passport_claude_model"
+    "${test_dir}/test_passport_claude_model"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_passport_claude_wire.c main/passport_claude_wire.c main/passport_claude_model.c main/passport_wire.c -lm \
+        -o "${test_dir}/test_passport_claude_wire"
+    "${test_dir}/test_passport_claude_wire"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_passport_provider.c main/passport_provider_model.c \
         -o "${test_dir}/test_passport_provider"
     "${test_dir}/test_passport_provider"
@@ -72,6 +81,10 @@ run_static_checks() {
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_sources.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_cursor.py
     "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_cursor_tokens.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_claude.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_claude_tokens.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_claude_setup.py
+    "${PASSPORT_TEST_PYTHON:-python3}" tests/test_passport_claude_bridge.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
 }

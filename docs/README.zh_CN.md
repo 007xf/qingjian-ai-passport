@@ -16,6 +16,8 @@ Passport 工牌功能分支新增青笺 1.3.1 的 Cursor 账户额度和 Gemini 
 
 Mac 连接更新、后台自动重连、用量合计与验证边界见[后台同步说明](qingjian-background-sync.zh_CN.md)。
 
+青笺 1.5.0 新增独立的 Claude Code 记录 Token 与官方状态栏套餐额度，以及可选工牌页。详见 [Claude 接入与统计边界](qingjian-claude.zh_CN.md)。
+
 ## 硬件能力契约
 
 下表描述的是当前 `main` 已提供的应用能力，而不是芯片数据手册中所有可能的能力。

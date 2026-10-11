@@ -153,7 +153,7 @@ struct SourceSetupStatus: Identifiable {
     let errorCode: String?
 
     init?(_ raw: [String: Any]) {
-        guard let id = raw["provider"] as? String, ["cursor", "gemini"].contains(id),
+        guard let id = raw["provider"] as? String, ["cursor", "gemini", "claude"].contains(id),
               let status = raw["status"] as? String else { return nil }
         self.id = id; self.status = status
         errorCode = raw["error_code"] as? String
@@ -175,6 +175,10 @@ struct SourceSetupStatus: Identifiable {
     }
 
     var eventLabel: String {
+        if id == "claude" {
+            if !configured || !intact { return "保留原状态栏；配置完成后等待 Claude Code 的新响应。" }
+            return observed ? "已收到官方额度 · \(dateText(lastEvent, seconds: true))" : "等待 Claude Code 新响应提供官方额度；读取按钮不会启动任务。"
+        }
         if errorCode == "hooks_disabled" { return "原设置已关闭活动回调，青笺保留该选择。" }
         if errorCode == "owned_hook_modified" { return "检测到自定义回调改动，修复时不会覆盖。" }
         if status == "error" { return "配置或活动记录需要检查，暂不视为已接通。" }
@@ -268,6 +272,8 @@ final class PassportModel: ObservableObject {
     @Published var codexQuotaReady = false
     @Published var codexQuota: CodexQuotaSnapshot? = nil
     @Published var cursorQuota: CursorQuotaSnapshot? = nil
+    @Published var claudeUsage = ClaudeUsageSnapshot([:])
+    @Published var claudeDashboardAvailable: Bool? = nil
     @Published var cursorQuotaStatus = "尚未读取"
     @Published var dinoAvailable = false
     @Published private(set) var providerDashboardAvailable: Bool? = nil
@@ -516,6 +522,12 @@ final class PassportModel: ObservableObject {
         }
     }
 
+    func refreshClaudeUsage() {
+        run(["claude-usage"], label: "正在读取 Claude Code 用量", affectsConnection: false) { [weak self] reply in
+            self?.claudeUsage = ClaudeUsageSnapshot(reply["claude_usage"] as? [String: Any] ?? [:])
+        }
+    }
+
     private func applySources(_ reply: [String: Any]) {
         let rows = reply["sources"] as? [[String: Any]] ?? []
         sourceSetup = Dictionary(rows.compactMap(SourceSetupStatus.init).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -530,11 +542,11 @@ final class PassportModel: ObservableObject {
     }
 
     func configureSource(_ provider: String) {
-        guard !busy, ["cursor", "gemini"].contains(provider) else { return }
+        guard !busy, ["cursor", "gemini", "claude"].contains(provider) else { return }
         sourceSetupNotice = nil
         run(["sources-configure", "--provider", provider], label: "正在配置活动同步", affectsConnection: false) { [weak self] reply in
             self?.applySources(reply)
-            let name = provider == "cursor" ? "Cursor" : "Gemini CLI"
+            let name = provider == "cursor" ? "Cursor" : provider == "claude" ? "Claude Code 状态栏" : "Gemini CLI"
             let changed = reply["changed"] as? [String: Any] ?? [:]
             let count = (changed["providers"] as? [String] ?? []).count + (changed["support_files"] as? [String] ?? []).count
             self?.sourceSetupNotice = count == 0 ? "\(name) 配置完整，无需更改。新的任务事件到达后可重新检测。" :
@@ -599,7 +611,8 @@ final class PassportModel: ObservableObject {
     }
 
     var selectedFeatures: [PassportFeature] {
-        features.filter { config.feature_all || config.feature_mask & (1 << $0.id) != 0 }
+        features.filter { config.feature_all || config.feature_mask & (1 << $0.id) != 0 } +
+            (config.claude_enabled ? [PassportFeature(id: 8, name: "Claude Code", symbol: "chart.bar")] : [])
     }
 
     var validationError: String? {
@@ -744,6 +757,7 @@ final class PassportModel: ObservableObject {
             if let value = integer(device["stage"]), (0...2).contains(value) { stage = Int(value) }
             tokensStale = device["tokens_stale"] as? Bool ?? false
             codexDashboardAvailable = device["codex_dashboard_supported"] as? Bool ?? false
+            claudeDashboardAvailable = device["claude_dashboard_supported"] as? Bool ?? false
             providerDashboardAvailable = device["provider_dashboard_supported"] as? Bool ?? false
             dinoAvailable = integer(device["dino_state"]) != nil
             if let offset = integer(device["offset_min"]) { deviceOffsetMinutes = Int(offset) }
@@ -762,6 +776,7 @@ final class PassportModel: ObservableObject {
     }
 
     private func applyUsage(_ usage: [String: Any]) {
+        if usage.keys.contains("claude_usage") { claudeUsage = ClaudeUsageSnapshot(usage["claude_usage"] as? [String: Any] ?? [:]) }
         if let raw = usage["codex_quota"] as? [String: Any] { codexQuota = CodexQuotaSnapshot(raw) }
         if usage.keys.contains("cursor_quota") { applyCursorQuota(usage["cursor_quota"]) }
         // Some local operations (for example reset-cycle) return no providers.
@@ -814,7 +829,7 @@ final class PassportModel: ObservableObject {
         let python = resources.appendingPathComponent("Runtime/bin/python3").path
         let script = resources.appendingPathComponent("Backend/passport_bridge.py").path
         let statePath = state.path
-        let routed = backgroundEnabled && ["sync", "status", "upload", "screen", "pair", "reset-cycle", "tokens", "cursor-usage"].contains(command.first ?? "")
+        let routed = backgroundEnabled && ["sync", "status", "upload", "screen", "pair", "reset-cycle", "tokens", "cursor-usage", "claude-usage"].contains(command.first ?? "")
         bridgeQueue.async { [weak self] in
             var result: [String: Any] = [:]
             var failure: String?
@@ -1214,6 +1229,54 @@ struct CodexUsageCard: View {
     }
 }
 
+struct ClaudeUsageCard: View {
+    @ObservedObject var model: PassportModel
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let usage = model.claudeUsage
+            let tokensVisible = usage.tokensObservedAt.map { context.date.timeIntervalSince1970 >= $0 } == true
+            let quotaVisible = usage.quotaObservedAt.map { context.date.timeIntervalSince1970 >= $0 } == true
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Claude Code 用量").font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Button("读取用量") { model.refreshClaudeUsage() }.buttonStyle(.bordered).controlSize(.small).disabled(model.busy)
+                }
+                Text("\(usage.tokensFresh(at: context.date) ? "今日记录 Token" : "上次记录日 Token")：\(tokensVisible ? usage.todayTokens.map(exactTokenText) ?? "未知" : "未知")")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(usage.tokensFresh(at: context.date) ? ink : muted)
+                Text("本机历史 Token：\(tokensVisible ? usage.lifetimeTokens.map(exactTokenText) ?? "未知" : "未知")").font(.system(size: 11)).foregroundStyle(muted)
+                if usage.tokensIndexPending {
+                    Text("首次统计尚未完成，后续读取将继续。").font(.system(size: 10)).foregroundStyle(.orange)
+                }
+                if tokensVisible {
+                    Text("\(usage.tokensFresh(at: context.date) ? "今日记录更新" : "上次记录日") \(dateText(usage.tokensObservedAt, seconds: true))").font(.system(size: 10)).foregroundStyle(muted)
+                }
+                if quotaVisible, !usage.windows.isEmpty {
+                    ForEach(usage.windows) { window in
+                        let fresh = usage.quotaFresh(window, at: context.date)
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(window.title)
+                                Spacer()
+                                Text(String(format: fresh ? "%.1f%% 已用" : "%.1f%% 已用 · 上次", window.used))
+                            }.font(.system(size: 11))
+                            ProgressView(value: window.used, total: 100).tint(fresh ? accent : .orange)
+                            Text("重置 \(dateText(window.resetAt))").font(.system(size: 10)).foregroundStyle(muted)
+                        }
+                    }
+                    Text("官方状态栏观测 \(dateText(usage.quotaObservedAt, seconds: true))").font(.system(size: 10)).foregroundStyle(muted)
+                } else {
+                    Text("额度未知 · 配置状态栏后，等待 Claude Code 的新响应。").font(.system(size: 11)).foregroundStyle(muted)
+                }
+                Text("本机日志记录值，含缓存读写；额度来自 Claude Code 官方状态栏。会话账户无法完全核验。Claude 独立显示，不计入成长。").font(.system(size: 10)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
+                if model.claudeDashboardAvailable == false && model.config.claude_enabled {
+                    Text("Mac 可查看用量；工牌 Claude 页需要 1.5.0 固件。").font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }.padding(16).background(panel, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
 struct BackgroundSyncSheet: View {
     @ObservedObject var model: PassportModel
     var body: some View {
@@ -1264,8 +1327,7 @@ struct SourcesSheet: View {
                     Text(state?.eventLabel ?? "读取本机配置中…").font(.system(size: 10)).foregroundStyle(muted)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
-                    Button(state?.configured == true ? (id == "cursor" ? "检查 / 修复 Cursor" : "检查 / 修复 CLI") :
-                            (id == "cursor" ? "配置 Cursor" : "配置 Gemini CLI")) {
+                    Button(state?.configured == true ? "检查 / 修复" : id == "claude" ? "配置状态栏" : id == "cursor" ? "配置 Cursor" : "配置 Gemini CLI") {
                         model.configureSource(id)
                     }.buttonStyle(.bordered).controlSize(.small).disabled(model.busy || state == nil)
                 }
@@ -1275,6 +1337,7 @@ struct SourcesSheet: View {
     }
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("数据源接入").font(.system(size: 21, weight: .semibold))
@@ -1286,6 +1349,9 @@ struct SourcesSheet: View {
             card("cursor", title: "Cursor", subtitle: "桌面 Agent 与 CLI · 官方活动回调",
                  detail: "记录任务开始、工具活动和结束；套餐用量读取当前 Cursor 账号。", configurable: true)
             CursorUsageCard(model: model)
+            card("claude", title: "Claude Code", subtitle: "本机 Token 与官方状态栏套餐额度",
+                 detail: "保留原状态栏命令与设置。配置后等待已登录 Claude Code 的正常新响应；青笺只读观测值，不启动模型任务。", configurable: true)
+            ClaudeUsageCard(model: model)
             card("gemini", title: "Gemini", subtitle: "Mac 客户端与 CLI 分开接入",
                  detail: "Gemini Mac 客户端暂未找到稳定的实时状态接口。下方只配置 Gemini CLI，需要 CLI 本身能够登录和运行；不会连接桌面版。", configurable: true)
             if let notice = model.sourceSetupNotice {
@@ -1302,7 +1368,8 @@ struct SourcesSheet: View {
                 Button("完成") { model.showSourcesSettings = false }.buttonStyle(CyanButtonStyle())
                     .keyboardShortcut(.defaultAction).disabled(model.busy)
             }
-        }.padding(24).frame(width: 590).background(paper).foregroundStyle(ink).tint(accent).preferredColorScheme(.dark)
+        }
+        }.padding(24).frame(width: 590, height: 700).background(paper).foregroundStyle(ink).tint(accent).preferredColorScheme(.dark)
     }
 }
 
@@ -1323,6 +1390,7 @@ struct ContentView: View {
                         if model.config.feature_all || model.config.feature_mask & (1 << 1) != 0 {
                             CursorUsageCard(model: model)
                         }
+                        if model.config.claude_enabled { ClaudeUsageCard(model: model) }
                         usagePanel
                     }.padding(26)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1469,6 +1537,8 @@ struct ContentView: View {
                 }
             }.padding(13).background(panel, in: RoundedRectangle(cornerRadius: 8))
             }
+            Toggle("独立显示 Claude Code 用量页", isOn: Binding(get: { model.config.claude_enabled }, set: { model.config.claude_enabled = $0; model.change() }))
+                .toggleStyle(.checkbox).font(.system(size: 11))
             Text("勾选只控制显示，不代表功能已接入。当前状态显示在各选项下方。")
                 .font(.system(size: 10)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
         }

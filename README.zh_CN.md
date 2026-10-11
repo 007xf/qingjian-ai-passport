@@ -12,11 +12,16 @@
 这是个人与 AI 协作开发的社区项目，不是 FoloToy、OpenAI、Cursor、Google 或 TYPE-MOON 的官方产品。
 
 - 源码与问题反馈：https://github.com/007xf/qingjian-ai-passport
-- Mac App、固件与校验文件：https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.4.0
-- AI Passport 社区玩法：[青笺 · 项目 328](https://ai-passport.folotoy.cn/plays/328/)。更新版 1.4.0 已提交为版本记录 **572**，当前**待审核**；此前通过审核的旧版仍公开，安装前请核对社区提供的版本号。
-- 本次发行版本：1.4.0 / Mac 构建 12（社区测试版）
+- Mac App、固件与校验文件：https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.5.0
+- AI Passport 社区玩法：[青笺 · 项目 328](https://ai-passport.folotoy.cn/plays/328/)。当前公开且已审核的固件为 **1.4.0，版本记录 572**。1.5.0 源码更新的构建、提交与审核状态独立记录，安装前请核对社区实际提供的版本。
+- 本次发行版本：1.5.0 / Mac 构建 13（社区测试版）
 
-## 1.4.0 更新
+## 1.5.0 更新
+
+- 新增 Claude Code 本机记录日／历史 Token，以及官方状态栏提供的 5 小时／7 天套餐已用比例。配置时保留原状态栏并私密备份；缺失或过期数据明确显示未知或上次读数，不启动模型任务。
+- 新增可独立勾选的 Claude 工牌页，支持兼容固件的 USB／蓝牙同步；Claude 不改变现有 Codex＋Cursor 成长合计。详见 [Claude 接入与统计边界](docs/qingjian-claude.zh_CN.md)。
+
+## 此前的连接与成长更新
 
 - 后台同步独立运行：退出编辑器后仍连接已选择的工牌，支持断线自动重连，开启后随当前 Mac 用户登录启动。
 - 默认每分钟静默同步，可改成每小时，也可随时手动同步；连接状态约每 30 秒检查一次，减少无变化的界面刷新。
@@ -39,16 +44,17 @@ Mac App 需要 Apple 芯片 Mac（arm64）及 macOS 14 或更新版本，内置�
 - 角色成长：三个阶段的图片可独立替换，两次进化门槛可修改；达到最终门槛时播放短暂变身动画。
 - Codex：显示主额度桶实际存在的额度窗口和重置时间，另行统计本机当前周期 Token。
 - Cursor：读取已登录账户的套餐、两组已用比例、重置时间与本账单月真实 Token；活动状态独立展示。
+- Claude Code：显示本机记录日与历史 Token、官方状态栏套餐额度；不代表全设备账单，也不计入成长。
 - Gemini：保留 Gemini CLI 的本机记录与活动回调入口。原生 Gemini Mac、网页和 Antigravity 未接入。
 - 智能体：按来源显示工作中、空闲、等待输入或错误；没有新记录时明确显示未知或过期。取消某个 AI 功能后，概览也隐藏对应行。
 - Dino：Chromium 原版造型的离线恐龙游戏，支持跳跃、持续下蹲、暂停、重试和最高分保存。
 
-可选功能为 Codex、Cursor、Gemini、智能体、Dino 五项。Grok Bot 已移除，独立桌宠已取消，语音暂不开发。本固件不启动 Wi-Fi 或音频。
+原有五项为 Codex、Cursor、Gemini、智能体、Dino；Claude Code 用量页可独立勾选后上传。Grok Bot 已移除，独立桌宠已取消，语音暂不开发。本固件不启动 Wi-Fi 或音频。
 
 ## 固件文件与烧录地址
 
-- `qingjian-1.4.0-full.bin`：完整合并镜像，起始地址 **0x0**。供官方社区安装器或兼容本地刷机工具使用，包含引导程序、分区表与应用。虽然镜像不包含设备身份区和恢复区，它可能覆盖当前应用设置；刷前务必备份，不要启用整片擦除。
-- `qingjian-1.4.0-app.bin`：仅应用段，起始地址 **0x10000**。只供分区布局已经兼容的设备保留配置升级；不能放到地址 0，也不能当作社区完整镜像。
+- `qingjian-1.5.0-full.bin`：完整合并镜像，起始地址 **0x0**。供官方社区安装器或兼容本地刷机工具使用，包含引导程序、分区表与应用。虽然镜像不包含设备身份区和恢复区，它可能覆盖当前应用设置；刷前务必备份，不要启用整片擦除。
+- `qingjian-1.5.0-app.bin`：仅应用段，起始地址 **0x10000**。只供分区布局已经兼容的设备保留配置升级；不能放到地址 0，也不能当作社区完整镜像。
 - 不向他人分享自己的完整 Flash 备份、配对数据或专属恢复链接。本项目发行包仅含源码构建的通用镜像，没有作者设备转储。
 - 电量充足、使用可传输数据的线材，刷写期间不要拔线。硬件或分区不符时应停止并先核对官方文档。
 
@@ -81,7 +87,7 @@ Mac App 需要 Apple 芯片 Mac（arm64）及 macOS 14 或更新版本，内置�
 
 GitHub 提供[角色工坊技能](skills/qingjian-character-creator/SKILL.zh_CN.md)，名称为 `qingjian-character-creator`，以及[可编辑提示词模板](skills/qingjian-character-creator/references/character-prompts.zh_CN.md)。可以继续用青子，也可以换成其他角色或自己的原创形象；青笺中三阶段图片和进化门槛仍能独立修改。
 
-1. 下载 [qingjian-character-creator.zip](https://github.com/007xf/qingjian-ai-passport/releases/download/v1.4.0/qingjian-character-creator.zip)，把解压得到的 `qingjian-character-creator` 文件夹放入 `~/.codex/skills/`。最终应存在 `~/.codex/skills/qingjian-character-creator/SKILL.md`；若已有自行修改的同名技能，先保留原件再替换。
+1. 下载 [qingjian-character-creator.zip](https://github.com/007xf/qingjian-ai-passport/releases/download/v1.5.0/qingjian-character-creator.zip)，把解压得到的 `qingjian-character-creator` 文件夹放入 `~/.codex/skills/`。最终应存在 `~/.codex/skills/qingjian-character-creator/SKILL.md`；若已有自行修改的同名技能，先保留原件再替换。
 2. 新开一个 Codex 会话，使用 `$qingjian-character-creator`，附上自己的参考图，说明要保留的特点和三阶段变化。例如：
 
    ```text
@@ -149,7 +155,7 @@ Codex 统计周期以主周额度窗口为依据。账户周额度窗口重置�
 
 ## 验证、贡献与使用边界
 
-既有画面、USB、按键、角色同步与 Dino 已通过用户实机验收。本轮 1.4.0 已完成电量恢复读回，用户确认新版蓝牙连接验证通过；也验证了退出编辑器后的后台同步以及离线时释放休眠请求。构建、自动化测试、签名和保护区检查分别记录。未完成长时耗电对照、合盖睡眠持续连接或另一台 Mac 的实测，不保证所有设备批次、系统或第三方账号行为相同。详细记录：[验证记录](docs/RELEASE-VALIDATION.zh_CN.md)。
+既有画面、USB、按键、角色同步与 Dino 已通过用户实机验收。本轮 1.5.0 已完成电量恢复读回，用户确认新版蓝牙连接验证通过；也验证了退出编辑器后的后台同步以及离线时释放休眠请求。构建、自动化测试、签名和保护区检查分别记录。未完成长时耗电对照、合盖睡眠持续连接或另一台 Mac 的实测，不保证所有设备批次、系统或第三方账号行为相同。详细记录：[验证记录](docs/RELEASE-VALIDATION.zh_CN.md)。
 
 欢迎通过 GitHub Issues 提交版本、设备型号、连接方式、复现步骤和脱敏截图。不要提交登录凭据、完整会话日志、个人 Flash 备份或设备专属恢复链接。
 

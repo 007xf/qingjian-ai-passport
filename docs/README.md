@@ -16,6 +16,8 @@ The Passport Badge feature branch adds Qingjian 1.3.1 Cursor account quota and G
 
 See [background sync, reconnection and combined growth](qingjian-background-sync.md) for the Mac connection update and its validation limits.
 
+Qingjian 1.5.0 adds independent Claude Code recorded Tokens and documented status-line subscription quota, with an optional badge page. See [Claude setup and counting boundaries](qingjian-claude.md).
+
 ## Hardware capability contract
 
 The table below describes the application capabilities implemented by the current `main` branch. It is not a list of everything that might be possible according to the chip datasheet.

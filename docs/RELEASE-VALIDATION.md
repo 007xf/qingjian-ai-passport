@@ -1,6 +1,12 @@
 **English** · [简体中文](RELEASE-VALIDATION.zh_CN.md)
 
-# Release validation — 1.4.0, Mac build 12
+# Release validation
+
+## 1.5.0, Mac build 13 — source update
+
+Claude Code adds local recorded Tokens, official status-line quota observations and an optional badge page. The new source must pass its own complete host gate, ESP-IDF 5.5.3 firmware build and packaged-Mac verification. These results and the new artifact hashes are recorded after those steps; the historical 1.4.0 results below do not certify this update. New physical-device and real-account acceptance is not yet claimed. See [Claude setup and source limits](qingjian-claude.md).
+
+## Historical 1.4.0, Mac build 12
 
 - Build: PASS. ESP-IDF 5.5.3 firmware build and protected-layout validation passed. The application is 2,336,816 bytes, below the 3 MB limit; the merged image is 2,402,352 bytes. Native Mac compilation and app signature-integrity checks passed.
 - Host tests: PASS. 366 Python tests cover the bridge, background-service ownership and retries, independent Token cycles, Cursor whole-period totals, stale caches and existing integrations. Native configuration, connection routing, quota freshness/display and the repository's C model/protocol/game/layout tests also passed.

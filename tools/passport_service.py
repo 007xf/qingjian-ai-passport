@@ -36,7 +36,7 @@ STATUS_INTERVAL = 30
 SNAPSHOT_STALE_SECONDS = 120
 AWAKE_GRACE_SECONDS = 90
 OWNER_IDLE_SECONDS = 2
-FORWARDED = {"status", "sync", "upload", "screen", "pair", "tokens", "reset-cycle", "cursor-usage"}
+FORWARDED = {"status", "sync", "upload", "screen", "pair", "tokens", "reset-cycle", "cursor-usage", "claude-usage"}
 DEVICE_ACTIONS = {"status", "sync", "upload", "screen", "pair"}
 
 
@@ -233,6 +233,7 @@ def launch_agent_plist(args, *, python=None, script=None):
     script = str(Path(script or Path(__file__).with_name("passport_bridge.py")).absolute())
     command = [python, "-B", script, "--state-dir", str(service_paths(args.state_dir)["state"]),
                "--codex-home", str(Path(args.codex_home).expanduser())]
+    command.extend(["--claude-home", str(Path(getattr(args, "claude_home", Path.home() / ".claude")).expanduser())])
     if getattr(args, "codex_cli", None):
         command.extend(["--codex-cli", args.codex_cli])
     command.extend(["service-run", "--sync-interval", str(configured_sync_interval(args))])
@@ -244,7 +245,7 @@ def launch_agent_plist(args, *, python=None, script=None):
     revision = hashlib.sha256()
     backend = Path(script).parent
     for name in ("passport_service.py", "passport_bridge.py", "passport_ble.py", "passport_cursor.py",
-                 "passport_cursor_tokens.py", "passport_providers.py"):
+                 "passport_cursor_tokens.py", "passport_providers.py", "passport_claude.py", "passport_claude_tokens.py"):
         candidate = backend / name
         revision.update(name.encode())
         if candidate.is_file():
@@ -502,6 +503,12 @@ class SyncOwner:
             current["cursor_quota"] = quota
             self.update(usage=current)
             return {"ok": True, "cursor_quota": quota, "service": self.view()}
+        if action == "claude-usage":
+            value = self.bridge.collect_claude_usage(args.state_dir, getattr(args, "claude_home", None), refresh=True)
+            current = copy.deepcopy(self.snapshot.get("usage") or {})
+            current["claude_usage"] = value
+            self.update(usage=current)
+            return {"ok": True, "claude_usage": value, "service": self.view()}
         if action == "reset-cycle" and message.get("reason") != "manual_reset_card":
             raise ServiceError("手动重置必须注明重置卡记录")
         result = self.bridge.read_tokens(args, manual=action == "reset-cycle")
