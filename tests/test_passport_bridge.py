@@ -78,6 +78,19 @@ class CodexAccountIsolationTests(unittest.TestCase):
         self.assertTrue(result["account_verified"])
         self.assertEqual(result["account_hash"], "hashed-a")
 
+    def test_inventory_limit_cannot_publish_a_complete_token_observation(self):
+        for index in range(3):
+            write_events(self.home / f"sessions/{index}.jsonl",
+                         [meta(str(index), self.now - 20), count(self.now - 10, 10, 10)])
+        with mock.patch.object(bridge, "MAX_COUNTER_FILES", 2), \
+                mock.patch.object(bridge, "app_server_quota", return_value=self.quota()):
+            result = bridge.read_tokens(self.args)
+        self.assertEqual(result["cycle_tokens"], 20)
+        self.assertTrue(result["coverage"]["cycle_scan_incomplete"])
+        self.assertIsNone(result["stage"])
+        self.assertFalse(result["codex_token_usage"]["available"])
+        self.assertFalse(result["codex_token_usage"]["complete"])
+
     def test_account_switch_forces_live_read_even_inside_sixty_seconds(self):
         self.prime()
         write_auth(self.home, "account-b", "subject-b")
@@ -417,6 +430,35 @@ class CounterTests(unittest.TestCase):
         self.assertIsNone(result["cycle_tokens"])
         self.assertEqual(result["lifetime_tokens"], 10)
 
+    def test_malformed_counter_shapes_do_not_abort_later_records(self):
+        malformed = [["token_count"]]
+        for field, value in (("info", "invalid"), ("total_token_usage", [1]),
+                             ("last_token_usage", "invalid")):
+            event = count(110, 10, 10)
+            if field == "info":
+                event["payload"][field] = value
+            else:
+                event["payload"]["info"][field] = value
+            malformed.append(event)
+        write_events(self.root / "sessions/a.jsonl",
+                     [meta("a", 100), *malformed, count(120, 30, 30)])
+        result = self.cache.scan(self.root)
+        self.assertEqual(result["malformed_records"], len(malformed))
+        self.assertIsNotNone(result["newest_uncertain_mtime"])
+        self.assertEqual(self.cache.totals(100)["cycle_tokens"], 30)
+        # The offending lines have been consumed; future refreshes stay usable.
+        self.assertEqual(self.cache.scan(self.root)["files_scanned"], 0)
+
+    def test_null_counter_info_can_still_supply_quota(self):
+        quota = {"limit_id": "codex", "primary": {"used_percent": 25,
+                 "window_minutes": 10080, "resets_at": 700000}}
+        event = count(110, 10, 10, quota)
+        event["payload"]["info"] = None
+        write_events(self.root / "sessions/a.jsonl", [meta("a", 100), event])
+        result = self.cache.scan(self.root)
+        self.assertEqual(result["malformed_records"], 0)
+        self.assertEqual(self.cache.log_quota()["observed_at"], 110)
+
     def test_historical_first_total_not_assigned_wholly_to_new_cycle(self):
         write_events(self.root / "sessions/a.jsonl", [meta("a", 100), count(200, 1000, 20)])
         self.cache.scan(self.root)
@@ -436,6 +478,40 @@ class CounterTests(unittest.TestCase):
         write_events(self.root / "sessions/a.jsonl", [meta("a", 100), count(110, 10, 10)])
         result = self.cache.scan(self.root, budget=0)
         self.assertTrue(result["scan_incomplete"])
+
+    def test_log_moved_during_inventory_does_not_abort_other_files(self):
+        moved = self.root / "sessions/moved.jsonl"
+        write_events(moved, [meta("moved", 100), count(110, 10, 10)])
+        write_events(self.root / "sessions/a.jsonl", [meta("a", 100), count(120, 30, 30)])
+        stat = Path.stat
+
+        def during_move(path, *args, **kwargs):
+            if path == moved:
+                raise FileNotFoundError("session moved after inventory")
+            return stat(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "stat", during_move):
+            result = self.cache.scan(self.root)
+        self.assertTrue(result["scan_incomplete"])
+        self.assertEqual(result["read_errors"], 1)
+        self.assertIsNotNone(result["newest_uncertain_mtime"])
+        self.assertEqual(self.cache.totals(100)["cycle_tokens"], 30)
+        # Its new path can be read on the next refresh without losing counters.
+        moved.rename(self.root / "sessions/returned.jsonl")
+        self.assertFalse(self.cache.scan(self.root)["scan_incomplete"])
+        self.assertEqual(self.cache.totals(100)["cycle_tokens"], 40)
+
+    def test_inventory_limit_reports_omitted_cycle_files(self):
+        for index in range(3):
+            write_events(self.root / f"sessions/{index}.jsonl",
+                         [meta(str(index), 100), count(110, 10, 10)])
+        with mock.patch.object(bridge, "MAX_COUNTER_FILES", 2):
+            result = self.cache.scan(self.root)
+        self.assertTrue(result["scan_incomplete"])
+        self.assertIsNotNone(result["newest_unscanned_mtime"])
+        self.assertEqual(self.cache.totals(100)["cycle_tokens"], 20)
+        self.assertFalse(self.cache.scan(self.root)["scan_incomplete"])
+        self.assertEqual(self.cache.totals(100)["cycle_tokens"], 30)
 
     def test_repeated_log_quota_does_not_refresh_observation_or_allow_out_of_order_values(self):
         quota = {"limit_id": "codex", "primary": {"used_percent": 25, "window_minutes": 10080, "resets_at": 700000}}

@@ -30,6 +30,7 @@ from xml.parsers.expat import ExpatError
 import zlib
 
 MAX_JSON = 65536
+MAX_COUNTER_FILES = 20000
 AVATAR_BYTES = 8224
 AVATAR_HEADER = struct.Struct("<4sHHII")
 AVATAR_RESOLUTIONS = (128, 112, 96, 80, 64, 56)
@@ -670,17 +671,26 @@ class CounterCache:
     def scan(self, codex_root, budget=256 * 1024 * 1024):
         paths = []
         errors = []
+        newest_error = 0
         for folder in ("sessions", "archived_sessions"):
             base = codex_root / folder
             if base.exists():
                 paths.extend(base.rglob("*.jsonl"))
-        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        truncated_inventory = len(paths) > 20000
-        paths = paths[:20000]
-        partial = truncated_inventory
-        newest_unscanned = 0
+        inventory = []
+        for path in paths:
+            try:
+                inventory.append((path, path.stat().st_mtime))
+            except OSError as exc:
+                # Codex can move a session to its archive during discovery.
+                # Continue other files, but do not claim complete coverage.
+                errors.append(type(exc).__name__)
+                newest_error = max(newest_error, time.time())
+        inventory.sort(key=lambda item: item[1], reverse=True)
+        truncated_inventory = len(inventory) > MAX_COUNTER_FILES
+        newest_unscanned = inventory[MAX_COUNTER_FILES][1] if truncated_inventory else 0
+        paths = [path for path, _ in inventory[:MAX_COUNTER_FILES]]
+        partial = truncated_inventory or bool(errors)
         scanned = 0
-        newest_error = 0
         for path in paths:
             try:
                 stat = path.stat()
@@ -724,6 +734,9 @@ class CounterCache:
                         except (ValueError, UnicodeDecodeError):
                             malformed += 1
                             continue
+                        if not isinstance(event, dict):
+                            malformed += 1
+                            continue
                         payload = event.get("payload")
                         if not isinstance(payload, dict):
                             continue
@@ -737,9 +750,19 @@ class CounterCache:
                         if event.get("type") != "event_msg" or payload.get("type") != "token_count":
                             continue
                         at = timestamp(event.get("timestamp"))
-                        info = payload.get("info") or {}
-                        total = (info.get("total_token_usage") or {}).get("total_tokens")
-                        last = (info.get("last_token_usage") or {}).get("total_tokens")
+                        info = payload.get("info")
+                        # Null info is a quota-only event. Other malformed JSON
+                        # shapes must not abort every future refresh of this log.
+                        if info is None:
+                            info = {}
+                        if not isinstance(info, dict):
+                            malformed += 1
+                            continue
+                        usage = [info.get(key) for key in ("total_token_usage", "last_token_usage")]
+                        if any(value is not None and not isinstance(value, dict) for value in usage):
+                            malformed += 1
+                            continue
+                        total, last = [(value or {}).get("total_tokens") for value in usage]
                         if sid and at is not None and valid_count(total) and total <= 2**63-1:
                             last = last if valid_count(last) and last <= total else None
                             fingerprint = hashlib.sha256(f"{sid}|{at}|{total}|{last}".encode()).hexdigest()
