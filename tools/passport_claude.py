@@ -146,7 +146,9 @@ def _window(value):
 
 
 def _snapshot(windows, now, profile_scope, session_scope, account_scope):
-    expiry = min(now + TTL_MS, *(value["reset_at_ms"] for value in windows.values()))
+    # Windows reset independently. A short five-hour reset must not invalidate
+    # the seven-day observation; each consumer still checks its window reset.
+    expiry = min(now + TTL_MS, max(value["reset_at_ms"] for value in windows.values()))
     value = {**_empty(), "observed_at_ms": now, "expires_at_ms": expiry,
              "profile_scope": profile_scope, "session_scope": session_scope,
              "account_scope": account_scope, "windows": windows,
@@ -185,8 +187,12 @@ def _cache_read(state, profile_scope, now):
         windows = {name: _window({"used_percentage": window["used_percent"],
                                  "resets_at": window["reset_at_ms"] // 1000}) for name, window in raw.items()}
         value = _snapshot(windows, observed, profile_scope, session, account)
-        if value["expires_at_ms"] != data.get("expires_at_ms"):
+        expiry = _milliseconds(data.get("expires_at_ms"))
+        if expiry > value["expires_at_ms"]:
             return None
+        # Preserve earlier, more conservative expiries written by older versions.
+        # Reading a cache must never extend its original observation lifetime.
+        value["expires_at_ms"] = expiry
         value.update(available=bool(account and now < value["expires_at_ms"]),
                      status="cached" if account and now < value["expires_at_ms"] else
                             "stale" if now >= value["expires_at_ms"] else "last_reading")
@@ -288,6 +294,15 @@ def capture_statusline(payload, state_dir, claude_home=None, now_ms=None):
         return _last_reading(cached, "session_account_unverified")
     if cached and cached["session_scope"] == session_scope and cached["account_scope"] == account and cached["windows"] == windows:
         return cached
+    if cached and cached["session_scope"] == session_scope and cached["account_scope"] == account and \
+            windows.keys() <= cached["windows"].keys() and all(cached["windows"][name] == value for name, value in windows.items()):
+        # Official statusLine windows can independently disappear (including at
+        # their reset). Removing one is not a new observation of unchanged ones.
+        snapshot = _snapshot(windows, cached["observed_at_ms"], scope, session_scope, account)
+        snapshot["expires_at_ms"] = min(cached["expires_at_ms"], snapshot["expires_at_ms"])
+        snapshot.update(available=bool(account and now < snapshot["expires_at_ms"]),
+                        status="cached" if account and now < snapshot["expires_at_ms"] else
+                               "stale" if now >= snapshot["expires_at_ms"] else "last_reading")
     # A session may retain an older identity after /login. Report that limitation;
     # also recheck the active CLI scope to avoid an identity race during capture.
     if account is not None:

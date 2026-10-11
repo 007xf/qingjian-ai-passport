@@ -83,6 +83,62 @@ class ClaudeQuotaTests(unittest.TestCase):
         self.assertEqual(changed["observed_at_ms"], self.NOW + 120000)
         self.assertEqual(changed["five_hour_used_percent"], 26)
 
+    def test_expired_window_drop_does_not_refresh_unchanged_weekly_observation(self):
+        payload = self.payload(five_reset=self.NOW // 1000 + 60)
+        first = self.capture(payload)
+        del payload["rate_limits"]["five_hour"]
+        dropped = self.capture(payload, self.NOW + 61000)
+        self.assertEqual(dropped["observed_at_ms"], first["observed_at_ms"])
+        self.assertEqual(dropped["expires_at_ms"], first["expires_at_ms"])
+        self.assertIsNone(dropped["five_hour_used_percent"])
+        self.assertEqual(dropped["seven_day_used_percent"], 50)
+        reread = self.collect(self.NOW + 181000)
+        self.assertFalse(reread["available"])
+        self.assertEqual(reread["observed_at_ms"], first["observed_at_ms"])
+
+    def test_one_window_reset_does_not_expire_the_other_before_its_ttl(self):
+        first = self.capture(self.payload(five_reset=self.NOW // 1000 + 60))
+        self.assertEqual(first["expires_at_ms"], self.NOW + 180000)
+        value = self.collect(self.NOW + 61000)
+        self.assertTrue(value["available"])
+        self.assertLess(value["five_hour_reset_at_ms"], self.NOW + 61000)
+        self.assertGreater(value["seven_day_reset_at_ms"], self.NOW + 61000)
+        self.assertEqual(value["observed_at_ms"], first["observed_at_ms"])
+
+    def test_missing_window_before_its_reset_also_does_not_refresh_retained_window(self):
+        payload = self.payload()
+        first = self.capture(payload)
+        del payload["rate_limits"]["five_hour"]
+        value = self.capture(payload, self.NOW + 10000)
+        self.assertTrue(value["available"])
+        self.assertEqual(value["observed_at_ms"], first["observed_at_ms"])
+        self.assertEqual(value["expires_at_ms"], first["expires_at_ms"])
+        self.assertIsNone(value["five_hour_used_percent"])
+
+    def test_real_remaining_window_usage_or_reset_change_can_capture_new_time(self):
+        for key, value in (("used_percentage", 51), ("resets_at", self.NOW // 1000 + 2 * 86400)):
+            with self.subTest(key=key):
+                payload = self.payload(five_reset=self.NOW // 1000 + 60, session=key)
+                self.capture(payload)
+                del payload["rate_limits"]["five_hour"]
+                payload["rate_limits"]["seven_day"][key] = value
+                updated = self.capture(payload, self.NOW + 61000)
+                self.assertEqual(updated["observed_at_ms"], self.NOW + 61000)
+                self.assertEqual(updated["expires_at_ms"], self.NOW + 241000)
+
+    def test_legacy_shorter_cache_expiry_is_never_extended_on_window_drop(self):
+        payload = self.payload(five_reset=self.NOW // 1000 + 60)
+        self.capture(payload)
+        path = self.state / claude.CACHE_NAME
+        saved = json.loads(path.read_text())
+        saved["expires_at_ms"] = self.NOW + 60000
+        path.write_text(json.dumps(saved))
+        del payload["rate_limits"]["five_hour"]
+        value = self.capture(payload, self.NOW + 61000)
+        self.assertFalse(value["available"])
+        self.assertEqual(value["observed_at_ms"], self.NOW)
+        self.assertEqual(value["expires_at_ms"], self.NOW + 60000)
+
     def test_missing_quota_does_not_create_zero_or_renew_old_capture(self):
         first = self.capture()
         before = (self.state / claude.CACHE_NAME).read_bytes()
