@@ -30,6 +30,7 @@ from xml.parsers.expat import ExpatError
 import zlib
 
 MAX_JSON = 65536
+MAX_COUNTER_FILES = 20000
 AVATAR_BYTES = 8224
 AVATAR_HEADER = struct.Struct("<4sHHII")
 AVATAR_RESOLUTIONS = (128, 112, 96, 80, 64, 56)
@@ -121,6 +122,9 @@ def validate_config(config):
             raise BridgeError(f"设备字体暂不支持：{''.join(unsupported[:8])}，请换成常用汉字或英文")
         result[key] = value
     result["feature_all"] = config.get("feature_all", False)
+    result["claude_enabled"] = config.get("claude_enabled", False)
+    if type(result["claude_enabled"]) is not bool:
+        raise BridgeError("claude_enabled 必须是布尔值")
     result["feature_mask"] = config.get("feature_mask", 147)
     if type(result["feature_all"]) is not bool:
         raise BridgeError("feature_all 必须是布尔值")
@@ -670,17 +674,26 @@ class CounterCache:
     def scan(self, codex_root, budget=256 * 1024 * 1024):
         paths = []
         errors = []
+        newest_error = 0
         for folder in ("sessions", "archived_sessions"):
             base = codex_root / folder
             if base.exists():
                 paths.extend(base.rglob("*.jsonl"))
-        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        truncated_inventory = len(paths) > 20000
-        paths = paths[:20000]
-        partial = truncated_inventory
-        newest_unscanned = 0
+        inventory = []
+        for path in paths:
+            try:
+                inventory.append((path, path.stat().st_mtime))
+            except OSError as exc:
+                # Codex can move a session to its archive during discovery.
+                # Continue other files, but do not claim complete coverage.
+                errors.append(type(exc).__name__)
+                newest_error = max(newest_error, time.time())
+        inventory.sort(key=lambda item: item[1], reverse=True)
+        truncated_inventory = len(inventory) > MAX_COUNTER_FILES
+        newest_unscanned = inventory[MAX_COUNTER_FILES][1] if truncated_inventory else 0
+        paths = [path for path, _ in inventory[:MAX_COUNTER_FILES]]
+        partial = truncated_inventory or bool(errors)
         scanned = 0
-        newest_error = 0
         for path in paths:
             try:
                 stat = path.stat()
@@ -724,6 +737,9 @@ class CounterCache:
                         except (ValueError, UnicodeDecodeError):
                             malformed += 1
                             continue
+                        if not isinstance(event, dict):
+                            malformed += 1
+                            continue
                         payload = event.get("payload")
                         if not isinstance(payload, dict):
                             continue
@@ -737,9 +753,19 @@ class CounterCache:
                         if event.get("type") != "event_msg" or payload.get("type") != "token_count":
                             continue
                         at = timestamp(event.get("timestamp"))
-                        info = payload.get("info") or {}
-                        total = (info.get("total_token_usage") or {}).get("total_tokens")
-                        last = (info.get("last_token_usage") or {}).get("total_tokens")
+                        info = payload.get("info")
+                        # Null info is a quota-only event. Other malformed JSON
+                        # shapes must not abort every future refresh of this log.
+                        if info is None:
+                            info = {}
+                        if not isinstance(info, dict):
+                            malformed += 1
+                            continue
+                        usage = [info.get(key) for key in ("total_token_usage", "last_token_usage")]
+                        if any(value is not None and not isinstance(value, dict) for value in usage):
+                            malformed += 1
+                            continue
+                        total, last = [(value or {}).get("total_tokens") for value in usage]
                         if sid and at is not None and valid_count(total) and total <= 2**63-1:
                             last = last if valid_count(last) and last <= total else None
                             fingerprint = hashlib.sha256(f"{sid}|{at}|{total}|{last}".encode()).hexdigest()
@@ -1245,6 +1271,76 @@ def collect_cursor_usage(state_dir, refresh=False):
     return quota
 
 
+def collect_claude_usage(state_dir, claude_home, refresh=False, no_quota=False):
+    # Parser-created commands always carry the selected profile. Legacy callers
+    # with no profile must not accidentally inspect the host's personal logs.
+    if claude_home is None:
+        return {"quota": {"available": False, "source": "claude_code_statusline", "error_code": "profile_unavailable"},
+                "token_usage": {"available": False, "source": "claude_code_local", "error_code": "profile_unavailable"}}
+    from passport_claude import collect_claude_quota, _empty as quota_empty
+    from passport_claude_tokens import collect_claude_tokens, empty as tokens_empty
+    try:
+        quota = quota_empty("disabled") if no_quota else collect_claude_quota(state_dir, home=claude_home, refresh=refresh)
+    except Exception:
+        quota = quota_empty("quota_unavailable")
+    try:
+        tokens = collect_claude_tokens(state_dir, home=claude_home)
+    except Exception:
+        tokens = tokens_empty("tokens_unavailable")
+    return {"quota": quota, "token_usage": tokens}
+
+
+def claude_dashboard_payload(usage, enabled=None):
+    usage = usage if isinstance(usage, dict) else {}
+    tokens, quota = usage.get("token_usage") or {}, usage.get("quota") or {}
+    payload = {"source": "claude_code", "observed_utc_ms": 0, "expires_utc_ms": 0,
+               "today_tokens": None, "lifetime_tokens": None, "tokens_complete": False,
+               "quota_observed_utc_ms": 0, "quota_expires_utc_ms": 0,
+               "five_hour_used_percent": None, "seven_day_used_percent": None,
+               "five_hour_reset_ms": 0, "seven_day_reset_ms": 0}
+    now = time.time_ns() // 1_000_000
+    at, until = tokens.get("observed_at_ms"), tokens.get("expires_at_ms")
+    if tokens.get("source") == "claude_code_local" and tokens.get("complete") is True and \
+            all(type(value) is int for value in (at, until)) and 1704067200000 <= at <= now and at < until <= at + 180000 and \
+            all(valid_count(tokens.get(key)) and tokens[key] <= MAX_DEVICE_TOKENS for key in ("today_tokens", "lifetime_tokens")):
+        # Incomplete subsequent scans retain the original reading but may not
+        # look fresh merely because it has not reached its former TTL yet.
+        payload.update(observed_utc_ms=at, expires_utc_ms=until if tokens.get("available") is True else at,
+                       today_tokens=tokens["today_tokens"], lifetime_tokens=tokens["lifetime_tokens"], tokens_complete=True)
+    at, until = quota.get("observed_at_ms"), quota.get("expires_at_ms")
+    if quota.get("source") == "claude_code_statusline" and \
+            all(type(value) is int for value in (at, until)) and 1704067200000 <= at <= now and at < until <= at + 300000:
+        payload.update(quota_observed_utc_ms=at, quota_expires_utc_ms=until if quota.get("available") is True else at)
+        for prefix in ("five_hour", "seven_day"):
+            used, reset = quota.get(prefix + "_used_percent"), quota.get(prefix + "_reset_at_ms")
+            if type(used) in (int, float) and math.isfinite(used) and 0 <= used <= 100 and type(reset) is int and at < reset < 4102444800000:
+                payload[prefix + "_used_percent"] = used
+                payload[prefix + "_reset_ms"] = reset
+    if enabled is not None:
+        if type(enabled) is not bool:
+            raise BridgeError("Claude 显示开关无效")
+        payload["enabled"] = enabled
+    return payload
+
+
+def sync_claude_dashboard(device, status, token_result, enabled=None):
+    if status.get("claude_dashboard_supported") is not True:
+        token_result["claude_dashboard_sync"] = "unsupported_firmware"
+        return status
+    payload = claude_dashboard_payload(token_result.get("claude_usage"), enabled)
+    raw = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode()
+    if len(raw) > 512:
+        raise BridgeError("Claude 用量摘要超过设备协议上限")
+    device.request("CLAUDE " + base64.b64encode(raw).decode(), "@AP CLAUDE_OK")
+    expected = {"claude_observed_utc_ms": payload["observed_utc_ms"],
+                "claude_quota_observed_utc_ms": payload["quota_observed_utc_ms"]}
+    if enabled is not None:
+        expected["claude_enabled"] = enabled
+    status = device.wait_fields(expected)
+    token_result["claude_dashboard_sync"] = "verified"
+    return status
+
+
 def cursor_quota_payload(snapshot):
     empty = {"observed_utc_ms": 0, "expires_utc_ms": 0, "source": "cursor_app_api",
              "plan": "", "cursor_used_percent": None, "other_used_percent": None, "reset_at_ms": 0}
@@ -1279,6 +1375,8 @@ def sync_cursor_dashboard(device, status, token_result):
 
 
 def collect_provider_metadata(token_result, args):
+    token_result["claude_usage"] = collect_claude_usage(args.state_dir, getattr(args, "claude_home", None),
+                                                       getattr(args, "refresh_quota", False), getattr(args, "no_quota", False))
     token_result["cursor_quota"] = collect_cursor_usage(args.state_dir, getattr(args, "refresh_quota", False)) \
         if not getattr(args, "no_quota", False) else {"available": False, "status": "unavailable"}
     try:
@@ -1322,7 +1420,7 @@ def sync_provider_dashboards(device, status, token_result):
     return status
 
 
-def sync_device(device, token_result, config=None, prepared=None, reset_cycle=False):
+def sync_device(device, token_result, config=None, prepared=None, reset_cycle=False, claude_enabled=None):
     owns_settings = config is not None
     prepared = prepared or {}
     now = dt.datetime.now().astimezone()
@@ -1383,7 +1481,8 @@ def sync_device(device, token_result, config=None, prepared=None, reset_cycle=Fa
             avatar_sync_report(status, None, prepared, token_result, "cycle_unknown")
     status = sync_codex_dashboard(device, status, token_result)
     status = sync_cursor_dashboard(device, status, token_result)
-    return sync_provider_dashboards(device, status, token_result)
+    status = sync_provider_dashboards(device, status, token_result)
+    return sync_claude_dashboard(device, status, token_result, claude_enabled)
 
 
 def upload_device(device, config, token_result, prepared=None, reset_cycle=False):
@@ -1396,7 +1495,7 @@ def upload_device(device, config, token_result, prepared=None, reset_cycle=False
     if not config["feature_all"]:
         expected_features["feature_mask"] = config["feature_mask"]
     device.wait_fields(expected_features)
-    status = sync_device(device, token_result, config, prepared, reset_cycle)
+    status = sync_device(device, token_result, config, prepared, reset_cycle, config.get("claude_enabled", False))
     expected = {**badge, **expected_features}
     if not all(status.get(key) == value for key, value in expected.items()):
         raise BridgeError("最终回读与上传内容不同")
@@ -1468,6 +1567,7 @@ def parser():
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE))
     parser.add_argument("--codex-home", default=os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
     parser.add_argument("--codex-cli")
+    parser.add_argument("--claude-home", default=os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
     parser.add_argument("--via-service", action="store_true", help="通过本机后台服务串行执行，不另开设备连接")
     parser.add_argument("--no-quota", action="store_true")
     parser.add_argument("--refresh-quota", action="store_true")
@@ -1486,9 +1586,10 @@ def parser():
     service_run.add_argument("--sync-interval", type=int, choices=(60, 3600), default=None)
     commands.add_parser("sources-status", help="只读检查桌面/CLI活动接入，不连接工牌")
     setup = commands.add_parser("sources-configure", help="保留现有设置并配置官方活动回调")
-    setup.add_argument("--provider", action="append", choices=("cursor", "gemini"), required=True)
+    setup.add_argument("--provider", action="append", choices=("cursor", "gemini", "claude"), required=True)
     commands.add_parser("pair", help="通过可信 USB 请求蓝牙配对窗口")
     commands.add_parser("cursor-usage", help="只读刷新 Cursor 套餐用量")
+    commands.add_parser("claude-usage", help="读取 Claude Code 本机 Token 与官方状态栏额度")
     ble_scan = commands.add_parser("ble-scan", help="只读扫描，不自动连接")
     ble_scan.add_argument("--timeout", type=float, default=5)
     upload = commands.add_parser("upload")
@@ -1527,13 +1628,23 @@ def main():
             raise BridgeError("首次蓝牙配对窗口只能通过可信 USB 请求，请先连接 USB")
         if args.command == "cursor-usage":
             result = {"ok": True, "cursor_quota": collect_cursor_usage(args.state_dir, refresh=True)}
+        elif args.command == "claude-usage":
+            result = {"ok": True, "claude_usage": collect_claude_usage(args.state_dir, args.claude_home, refresh=True)}
         elif args.command in ("sources-status", "sources-configure"):
             try:
                 import passport_sources
             except ImportError as exc:
                 raise BridgeError("缺少数据源接入组件，请更新青笺。") from exc
             if args.command == "sources-status":
+                import passport_claude_setup
                 result = passport_sources.source_status(Path(args.state_dir).expanduser(), sys.executable)
+                if result.get("ok"):
+                    result["sources"].append(passport_claude_setup.source_status(args.state_dir, sys.executable, args.claude_home))
+            elif "claude" in args.provider:
+                import passport_claude_setup
+                if args.provider != ["claude"]:
+                    raise BridgeError("Claude Code 请单独配置，以保留原状态栏命令")
+                result = passport_claude_setup.configure(args.state_dir, sys.executable, args.claude_home)
             else:
                 result = passport_sources.configure_sources(Path(args.state_dir).expanduser(), sys.executable, args.provider)
             if result.get("ok") is not True:

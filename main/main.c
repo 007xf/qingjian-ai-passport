@@ -5,6 +5,7 @@
 #include "esp_log.h"
 
 void app_main(void) {
+    ESP_LOGI("main", "Qingjian firmware %s", PASSPORT_FIRMWARE_VERSION);
     if (bsp_i2c_init() != ESP_OK || bsp_display_init() != ESP_OK || !bsp_lvgl_init()) {
         ESP_LOGE("main", "Display initialization failed; stopping startup.");
         return;

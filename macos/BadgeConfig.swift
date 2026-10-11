@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 func integer(_ value: Any?) -> Int64? {
     if let number = value as? NSNumber { return number.int64Value }
@@ -24,11 +25,12 @@ struct BadgeConfig: Codable, Equatable {
     var intro = "如果你惹怒了我，我将会开启3技能"
     var feature_all = false
     var feature_mask = 147
+    var claude_enabled = false
     var avatar_paths: [String: String] = [:]
     var threshold1: Int64 = 77_777_777
     var threshold2: Int64 = 555_555_555
     init() {}
-    enum CodingKeys: String, CodingKey { case name, title, intro, feature_all, feature_mask, avatar_paths, avatar_path, threshold1, threshold2 }
+    enum CodingKeys: String, CodingKey { case name, title, intro, feature_all, feature_mask, claude_enabled, avatar_paths, avatar_path, threshold1, threshold2 }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "苍崎青子"
@@ -36,6 +38,7 @@ struct BadgeConfig: Codable, Equatable {
         intro = try c.decodeIfPresent(String.self, forKey: .intro) ?? "如果你惹怒了我，我将会开启3技能"
         feature_all = try c.decodeIfPresent(Bool.self, forKey: .feature_all) ?? false
         feature_mask = BadgeFeatureSelection.normalized(try c.decodeIfPresent(Int.self, forKey: .feature_mask) ?? 147)
+        claude_enabled = try c.decodeIfPresent(Bool.self, forKey: .claude_enabled) ?? false
         avatar_paths = try c.decodeIfPresent([String: String].self, forKey: .avatar_paths) ?? [:]
         if avatar_paths.isEmpty, let legacy = try c.decodeIfPresent(String.self, forKey: .avatar_path) { avatar_paths["0"] = legacy }
         threshold1 = try c.decodeIfPresent(Int64.self, forKey: .threshold1) ?? 77_777_777
@@ -45,6 +48,7 @@ struct BadgeConfig: Codable, Equatable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(name, forKey: .name); try c.encode(title, forKey: .title); try c.encode(intro, forKey: .intro)
         try c.encode(feature_all, forKey: .feature_all); try c.encode(BadgeFeatureSelection.normalized(feature_mask), forKey: .feature_mask)
+        try c.encode(claude_enabled, forKey: .claude_enabled)
         try c.encode(avatar_paths, forKey: .avatar_paths)
         try c.encode(threshold1, forKey: .threshold1); try c.encode(threshold2, forKey: .threshold2)
     }
@@ -55,6 +59,7 @@ struct BadgeConfig: Codable, Equatable {
         if let value = device["title"] as? String { title = value }
         if let value = device["intro"] as? String { intro = value }
         if let value = device["feature_all"] as? Bool { feature_all = value }
+        if let value = device["claude_enabled"] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() { claude_enabled = value.boolValue }
         if let value = integer(device["feature_mask"]), (0...255).contains(value) { feature_mask = BadgeFeatureSelection.normalized(Int(value)) }
         if let first = integer(device["threshold1"]), let second = integer(device["threshold2"]),
            first > 0, second > first, second <= 9_007_199_254_740_991 {

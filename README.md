@@ -13,12 +13,17 @@ Qingjian combines a personal badge, three evolving character forms, AI usage das
 
 This is an independent community project developed with AI assistance. It is not an official FoloToy, OpenAI, Cursor, Google or TYPE-MOON product.
 
-- [Download the Mac app, firmware and checksums](https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.4.0)
+- [Download the Mac app, firmware and checksums](https://github.com/007xf/qingjian-ai-passport/releases/tag/v1.5.0)
 - [Source and issues](https://github.com/007xf/qingjian-ai-passport)
-- [AI Passport community play 328](https://ai-passport.folotoy.cn/plays/328/). Version 1.4.0 was submitted as revision **572** and is **pending review**. The previously approved release remains public; check the version offered by the community before installing.
-- Version: **1.4.0, Mac build 12 — community preview**.
+- [AI Passport community play 328](https://ai-passport.folotoy.cn/plays/328/). The currently approved public firmware is **1.4.0, revision 572**. The 1.5.0 source update has separate build, submission and review status; check the actual community version before installation.
+- Version: **1.5.0, Mac build 13 — community preview**.
 
-## New in 1.4.0
+## New in 1.5.0
+
+- Claude Code adds independent local-day and local-history recorded Tokens, plus documented status-line 5-hour and 7-day subscription quota readings. Existing status-line commands are preserved with private backups. Missing or expired sources remain unknown or last readings; no model request is started.
+- An optional Claude page synchronizes over USB or Bluetooth with compatible firmware. Claude remains separate from Codex + Cursor growth. See [Claude setup and counting boundaries](docs/qingjian-claude.md).
+
+## Previous connection and growth update
 
 - A background sync service keeps the selected badge connected after the editor quits, reconnects automatically and starts with the Mac user session once enabled.
 - Quiet automatic refresh defaults to once a minute, with an hourly option and immediate manual Sync. Connection checks run about every 30 seconds; unchanged UI values are not repeatedly republished.
@@ -43,8 +48,8 @@ Download and unzip the complete app, move the extracted app bundle to Applicatio
 
 This firmware targets the compatible ESP32-C3, 8 MB AI Passport layout. Back up your own device before installation and keep its private recovery link private.
 
-- `qingjian-1.4.0-full.bin` is a **merged image for address 0x0**, including the bootloader, partition table and application. This is the community installer artifact. It may replace application settings even when chip erase is disabled.
-- `qingjian-1.4.0-app.bin` is an **application-only image for address 0x10000**, for an already compatible layout. Never flash this file at address zero.
+- `qingjian-1.5.0-full.bin` is a **merged image for address 0x0**, including the bootloader, partition table and application. This is the community installer artifact. It may replace application settings even when chip erase is disabled.
+- `qingjian-1.5.0-app.bin` is an **application-only image for address 0x10000**, for an already compatible layout. Never flash this file at address zero.
 - Neither release file contains a device Flash dump, card identity or pairing secrets. Both end before the protected identity region. Never enable a whole-chip erase or overwrite the identity/recovery regions. Do not use an image on an unknown layout or modified board.
 - Close serial clients before flashing and keep the cable connected. Use the [official installation tools](https://ai-passport.folotoy.cn/tools/web-flasher/) and your own [factory recovery instructions](https://ai-passport.folotoy.cn/guides/restore-factory-firmware/).
 
@@ -64,7 +69,7 @@ The optional Continue While Display Is Off setting prevents automatic idle syste
 
 The [Character Workshop skill](skills/qingjian-character-creator/SKILL.md), named `qingjian-character-creator`, and its [editable prompt templates](skills/qingjian-character-creator/references/character-prompts.md) are included in the GitHub source. You can keep Aoko, choose another character or design an original one; the three stage pictures and evolution thresholds remain independently editable in Qingjian.
 
-1. Download [qingjian-character-creator.zip](https://github.com/007xf/qingjian-ai-passport/releases/download/v1.4.0/qingjian-character-creator.zip). Extract its `qingjian-character-creator` folder into `~/.codex/skills/`, so the entry file is `~/.codex/skills/qingjian-character-creator/SKILL.md`. Keep any existing customized copy before replacing it.
+1. Download [qingjian-character-creator.zip](https://github.com/007xf/qingjian-ai-passport/releases/download/v1.5.0/qingjian-character-creator.zip). Extract its `qingjian-character-creator` folder into `~/.codex/skills/`, so the entry file is `~/.codex/skills/qingjian-character-creator/SKILL.md`. Keep any existing customized copy before replacing it.
 2. Start a new Codex session and invoke `$qingjian-character-creator`. Provide your own reference pictures, the traits to preserve, and the desired changes across the three stages. For example:
 
    ```text
@@ -80,6 +85,8 @@ The [Character Workshop skill](skills/qingjian-character-creator/SKILL.md), name
 The skill guides a capable AI client through the artwork process; it does not add image generation to the badge or the Qingjian editor. New generation or editing requires an available image tool, and the result still needs review and may need revisions. If no image tool is available, import existing PNGs you provide, or use the editable prompts in a tool you already have. Use reference images and characters only within the rights you hold; the source-code license does not grant third-party character rights.
 
 ## Connect your own AI tools
+
+**Claude Code:** Configure Claude Code under Data Sources, then wait for a normal response in your signed-in CLI. Qingjian chains the official `statusLine` data capture with the exact previous command; it does not call a private OAuth usage endpoint or copy credentials. The two quota windows have their own source/reset times. Read Usage reads the latest captured observation, without starting an AI task. Local-day and local-history Tokens include uncached input, output, cache creation and cache reads, deduplicating message/request aliases, streaming blocks, forks and copies. These are recorded local-profile values, potentially spanning past accounts; upstream transcript omissions cannot be reconstructed. An incremental metadata-only index can complete across refreshes. Enable the independent Claude page and Upload to Badge; older firmware skips it while the Mac can still display readings. [Setup, supported source fields and limits](docs/qingjian-claude.md).
 
 **Codex:** Sign in to the local Codex app or a compatible CLI. Qingjian locates the native command by the application's identity, including a renamed installation, and reads its available quota windows separately from this Mac's accessible Token logs. Input already includes cached input; output is added, with cumulative-event and inherited-fork deduplication. These counts are not a bill or a cross-device account total. Account changes and separate `CODEX_HOME` profiles are isolated. Codex counting follows its weekly quota reset; after actually using a reset card, confirm that event in Qingjian. This resets only Codex's counting period, leaving Cursor's month intact. Qingjian never redeems or buys a reset card.
 

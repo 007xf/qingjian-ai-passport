@@ -5,6 +5,9 @@
 #include "passport_codex_model.h"
 #include "passport_cursor_model.h"
 #include "passport_provider_model.h"
+#include "passport_claude_model.h"
+
+#define PASSPORT_FIRMWARE_VERSION "1.5.0"
 
 typedef struct {
     int battery_soc;
@@ -45,6 +48,13 @@ typedef struct {
     bool cursor_quota_stale;
     bool cursor_quota_known[2];
     float cursor_quota_used_percent[2];
+    bool claude_enabled;
+    int64_t claude_observed_utc_ms;
+    int64_t claude_quota_observed_utc_ms;
+    bool claude_tokens_ready;
+    bool claude_tokens_stale;
+    bool claude_quota_ready;
+    bool claude_quota_stale;
     uint32_t dino_score;
     uint32_t dino_best;
     int dino_state;
@@ -81,6 +91,9 @@ bool passport_set_tokens(uint64_t tokens, bool known);
 bool passport_set_thresholds(uint64_t first, uint64_t final);
 bool passport_set_codex(const passport_codex_snapshot_t *snapshot);
 bool passport_set_cursor(const passport_cursor_snapshot_t *snapshot);
+/* enabled_present is only set by explicit preference uploads. Omitting it
+ * updates readings in RAM without changing the separately saved preference. */
+bool passport_set_claude(const passport_claude_snapshot_t *snapshot, bool enabled_present, bool enabled);
 bool passport_set_pairing_display(bool visible, uint32_t passkey);
 bool passport_request_pairing(void);
 bool passport_set_provider(const passport_provider_snapshot_t *snapshot);

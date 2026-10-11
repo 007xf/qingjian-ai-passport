@@ -5,6 +5,7 @@
 #include "passport_avatar.h"
 #include "passport_codex_view.h"
 #include "passport_cursor_view.h"
+#include "passport_claude_view.h"
 #include "passport_dino.h"
 #include "passport_ble.h"
 #include "passport_provider_view.h"
@@ -39,17 +40,19 @@ static const char *TAG = "passport";
 _Static_assert(PASSPORT_CONFIG_BYTES >= BADGE_BLOB_BYTES, "NVS buffer must hold badge text");
 _Static_assert(PASSPORT_CONFIG_BYTES >= PASSPORT_THRESHOLDS_BYTES, "NVS buffer must hold thresholds");
 
-typedef enum { PAGE_BADGE, PAGE_CODEX, PAGE_CURSOR, PAGE_GEMINI, PAGE_AGENTS, PAGE_DINO, PAGE_SETTINGS, PAGE_COUNT } page_t;
+typedef enum { PAGE_BADGE, PAGE_CODEX, PAGE_CURSOR, PAGE_CLAUDE, PAGE_GEMINI, PAGE_AGENTS, PAGE_DINO, PAGE_SETTINGS, PAGE_COUNT } page_t;
 typedef enum { LAYER_HOME, LAYER_DETAIL, LAYER_SETTINGS, LAYER_FEATURES, LAYER_MODES } layer_t;
 typedef enum { EVENT_KEY, EVENT_TIME, EVENT_SCREEN, EVENT_SAVE, EVENT_SAVED, EVENT_ARTWORK, EVENT_CODEX,
-               EVENT_PAIR_DISPLAY, EVENT_PAIR_REQUEST, EVENT_PROVIDER, EVENT_CURSOR } event_type_t;
-typedef enum { SAVE_BADGE, SAVE_FEATURES, SAVE_TOKENS, SAVE_THRESHOLDS, SAVE_DINO } save_kind_t;
+               EVENT_PAIR_DISPLAY, EVENT_PAIR_REQUEST, EVENT_PROVIDER, EVENT_CURSOR, EVENT_CLAUDE } event_type_t;
+typedef enum { SAVE_BADGE, SAVE_FEATURES, SAVE_TOKENS, SAVE_THRESHOLDS, SAVE_DINO, SAVE_CLAUDE } save_kind_t;
 typedef struct {
     save_kind_t kind;
     passport_badge_t badge;
     passport_config_t features;
     passport_thresholds_t thresholds;
     uint32_t dino_best;
+    passport_claude_snapshot_t claude;
+    bool claude_enabled;
     esp_err_t result;
 } save_job_t;
 typedef struct {
@@ -66,6 +69,7 @@ typedef struct {
     uint32_t passkey;
     passport_provider_snapshot_t *provider;
     passport_cursor_snapshot_t *cursor;
+    passport_claude_snapshot_t *claude;
 } app_event_t;
 
 static QueueHandle_t s_events, s_saves;
@@ -79,6 +83,8 @@ static passport_input_t s_input;
 static passport_evolution_t s_evolution;
 static passport_codex_snapshot_t s_codex;
 static passport_cursor_snapshot_t s_cursor;
+static passport_claude_state_t s_claude = {.snapshot={.source="claude_code"}};
+static bool s_claude_enabled;
 static passport_provider_snapshot_t s_providers[PASSPORT_PROVIDER_COUNT];
 static uint32_t s_dino_best, s_dino_saved_best;
 static int64_t s_dino_save_retry;
@@ -120,6 +126,7 @@ static bool page_visible(page_t page) {
     uint8_t mask = passport_visible_features(&s_features, SUPPORTED_FEATURES);
     if (page == PAGE_CODEX) return (mask & (1u << PASSPORT_CODEX)) != 0;
     if (page == PAGE_CURSOR) return (mask & (1u << PASSPORT_CURSOR)) != 0;
+    if (page == PAGE_CLAUDE) return s_claude_enabled;
     if (page == PAGE_GEMINI) return (mask & (1u << PASSPORT_GEMINI)) != 0;
     if (page == PAGE_AGENTS) return (mask & (1u << PASSPORT_AGENT)) != 0;
     if (page == PAGE_DINO) return (mask & (1u << PASSPORT_DINO)) != 0;
@@ -127,7 +134,7 @@ static bool page_visible(page_t page) {
 }
 
 static const char *page_name(page_t page) {
-    static const char *names[] = {"Badge", "Codex", "Cursor", "Gemini", "Agents", "Dino", "Settings"};
+    static const char *names[] = {"Badge", "Codex", "Cursor", "Claude", "Gemini", "Agents", "Dino", "Settings"};
     return names[page];
 }
 
@@ -198,11 +205,12 @@ static void update_status_ui(void) {
         codex_usage->metric_kind == PASSPORT_PROVIDER_METRIC_TOKENS &&
         passport_provider_metric_available(codex_usage, utc), codex_usage->metric_value);
     passport_cursor_view_update(&s_cursor, utc);
+    passport_claude_view_update(&s_claude.snapshot, utc);
     passport_provider_view_update(s_providers, utc, passport_visible_features(&s_features, SUPPORTED_FEATURES));
 }
 
 static const char *page_title(page_t page) {
-    static const char *names[] = {"电子徽章", "Codex", "Cursor", "Gemini", "智能体", "Dino", "设置"};
+    static const char *names[] = {"电子徽章", "Codex", "Cursor", "Claude", "Gemini", "智能体", "Dino", "设置"};
     return names[page];
 }
 
@@ -261,6 +269,7 @@ static void build_screen(void) {
     passport_dino_destroy();
     passport_codex_view_destroy();
     passport_cursor_view_destroy();
+    passport_claude_view_destroy();
     passport_provider_view_destroy();
     s_flash = NULL;
     s_transform_start = 0;
@@ -299,6 +308,8 @@ static void build_screen(void) {
         passport_codex_view_create(s_screen);
     } else if (s_layer == LAYER_HOME && s_page == PAGE_CURSOR) {
         passport_cursor_view_create(s_screen);
+    } else if (s_layer == LAYER_HOME && s_page == PAGE_CLAUDE) {
+        passport_claude_view_create(s_screen);
     } else if (s_layer == LAYER_HOME && (s_page == PAGE_GEMINI || s_page == PAGE_AGENTS)) {
         passport_provider_view_create(s_screen, s_page == PAGE_GEMINI ? 2 : 3);
     } else if (s_layer == LAYER_HOME && s_page == PAGE_DINO) {
@@ -323,7 +334,7 @@ static void build_screen(void) {
     } else if (s_layer == LAYER_FEATURES) {
         char header[64];
         snprintf(header, sizeof(header), "%s · %u 项已显示", s_features.custom ? "自定义" : "全部支持项",
-                 passport_popcount(passport_visible_features(&s_features, SUPPORTED_FEATURES)));
+                 passport_popcount(passport_visible_features(&s_features, SUPPORTED_FEATURES)) + (s_claude_enabled ? 1u : 0u));
         page_heading("功能展示", header);
         unsigned row = 0;
         for (unsigned i = 0; i < PASSPORT_FEATURE_COUNT; i++) {
@@ -339,6 +350,11 @@ static void build_screen(void) {
             lv_obj_set_style_text_align(state, LV_TEXT_ALIGN_RIGHT, 0);
             row++;
         }
+        label_at(s_screen, "Claude", 16, 116 + row * 25, 117, &passport_font_14, COLOR_PRIMARY);
+        lv_obj_t *claude_state = label_at(s_screen, s_claude_enabled ? "已显示" : "已隐藏",
+                                          137, 116 + row * 25, 87, &passport_font_14,
+                                          s_claude_enabled ? COLOR_ACCENT : COLOR_DIM);
+        lv_obj_set_style_text_align(claude_state, LV_TEXT_ALIGN_RIGHT, 0);
         footer("在 Mac 上选择展示功能");
     } else if (s_layer == LAYER_MODES) {
         page_heading("切换页面", "只显示已启用的功能");
@@ -440,11 +456,14 @@ void passport_get_status(passport_status_t *out) {
     passport_clock_t clock;
     passport_codex_snapshot_t codex;
     passport_cursor_snapshot_t cursor;
+    passport_claude_snapshot_t claude;
     taskENTER_CRITICAL(&s_lock);
     *out = s_status;
     clock = s_clock;
     codex = s_codex;
     cursor = s_cursor;
+    claude = s_claude.snapshot;
+    out->claude_enabled = s_claude_enabled;
     taskEXIT_CRITICAL(&s_lock);
     out->time_synced = passport_clock_now(&clock, now_ms(), &out->utc_ms);
     if (!out->time_synced) out->utc_ms = 0;
@@ -464,6 +483,15 @@ void passport_get_status(passport_status_t *out) {
         out->cursor_quota_known[i] = passport_cursor_snapshot_display_known(&cursor, i);
         out->cursor_quota_used_percent[i] = out->cursor_quota_known[i] ? cursor.used_percent[i] : 0;
     }
+    out->claude_observed_utc_ms = claude.observed_utc_ms;
+    out->claude_quota_observed_utc_ms = claude.quota_observed_utc_ms;
+    out->claude_tokens_ready = passport_claude_tokens_display_known(&claude, 0) ||
+                              passport_claude_tokens_display_known(&claude, 1);
+    out->claude_tokens_stale = out->claude_tokens_ready && !passport_claude_tokens_fresh(&claude, out->utc_ms);
+    out->claude_quota_ready = passport_claude_quota_display_known(&claude, 0) ||
+                             passport_claude_quota_display_known(&claude, 1);
+    out->claude_quota_stale = out->claude_quota_ready &&
+        !passport_claude_quota_fresh(&claude, 0, out->utc_ms) && !passport_claude_quota_fresh(&claude, 1, out->utc_ms);
 }
 
 void passport_get_badge(passport_badge_t *out) {
@@ -553,6 +581,25 @@ static bool submit_job(save_job_t *job) {
     s_status.save_busy = false;
     taskEXIT_CRITICAL(&s_lock);
     free(job);
+    return false;
+}
+
+bool passport_set_claude(const passport_claude_snapshot_t *snapshot, bool enabled_present, bool enabled) {
+    if (!passport_claude_snapshot_valid(snapshot)) return false;
+    if (enabled_present) {
+        save_job_t *job = calloc(1, sizeof(*job));
+        if (!job) return false;
+        job->kind = SAVE_CLAUDE;
+        job->claude = *snapshot;
+        job->claude_enabled = enabled;
+        return submit_job(job);
+    }
+    passport_claude_snapshot_t *copy = malloc(sizeof(*copy));
+    if (!copy) return false;
+    *copy = *snapshot;
+    app_event_t event = {.type=EVENT_CLAUDE, .claude=copy};
+    if (send_event(&event)) return true;
+    free(copy);
     return false;
 }
 
@@ -663,6 +710,13 @@ static void load_config(void) {
         s_dino_best = (uint32_t)blob[4] | ((uint32_t)blob[5] << 8) | ((uint32_t)blob[6] << 16) | ((uint32_t)blob[7] << 24);
         s_dino_saved_best = s_dino_best;
     }
+    length = sizeof(blob);
+    result = nvs_get_blob(handle, "claude", blob, &length);
+    if (result != ESP_ERR_NVS_NOT_FOUND &&
+        (result != ESP_OK || !passport_claude_config_decode(blob, length, &s_claude_enabled))) {
+        s_claude_enabled = false;
+        strcpy(s_notice, "Claude display needs repair in Mac app");
+    }
     nvs_close(handle);
 }
 
@@ -684,6 +738,10 @@ static void save_worker(void *unused) {
             passport_config_encode(&job->features, blob);
             length = PASSPORT_CONFIG_BYTES;
             key = "features";
+        } else if (job->kind == SAVE_CLAUDE) {
+            passport_claude_config_encode(job->claude_enabled, blob);
+            length = PASSPORT_CLAUDE_CONFIG_BYTES;
+            key = "claude";
         } else if (job->kind == SAVE_DINO) {
             memcpy(blob, "APD1", 4);
             for (unsigned i = 0; i < 4; ++i) blob[4+i] = (uint8_t)(job->dino_best >> (8*i));
@@ -736,6 +794,7 @@ static void finish_job(save_job_t *job) {
     bool animate = false;
     unsigned old_stage = s_badge.stage;
     bool needs_rebuild = job->kind == SAVE_FEATURES ||
+        (job->kind == SAVE_CLAUDE && job->claude_enabled != s_claude_enabled) ||
         (job->kind == SAVE_BADGE && (strcmp(job->badge.name, s_badge.name) ||
          strcmp(job->badge.title, s_badge.title) || strcmp(job->badge.intro, s_badge.intro)));
     if (job->result == ESP_OK) {
@@ -754,6 +813,11 @@ static void finish_job(save_job_t *job) {
             taskEXIT_CRITICAL(&s_lock);
         } else if (job->kind == SAVE_FEATURES) {
             s_features = job->features;
+            if (!page_visible(s_page)) { s_page = PAGE_BADGE; s_layer = LAYER_HOME; }
+        } else if (job->kind == SAVE_CLAUDE) {
+            taskENTER_CRITICAL(&s_lock);
+            s_claude_enabled = job->claude_enabled;
+            taskEXIT_CRITICAL(&s_lock);
             if (!page_visible(s_page)) { s_page = PAGE_BADGE; s_layer = LAYER_HOME; }
         } else if (job->kind == SAVE_DINO) {
             s_dino_saved_best = job->dino_best;
@@ -809,6 +873,13 @@ static void handle_save(save_job_t *job) {
         changed = job->thresholds.first != s_thresholds.first || job->thresholds.final != s_thresholds.final;
     } else if (job->kind == SAVE_DINO) {
         changed = job->dino_best > s_dino_saved_best;
+    } else if (job->kind == SAVE_CLAUDE) {
+        /* Apply readings in queue order before the potentially slow NVS write.
+         * Finishing a preference save must never replay an older snapshot. */
+        taskENTER_CRITICAL(&s_lock);
+        passport_claude_state_apply(&s_claude, &job->claude);
+        taskEXIT_CRITICAL(&s_lock);
+        changed = job->claude_enabled != s_claude_enabled;
     }
     if (!changed) {
         job->result = ESP_OK;
@@ -904,7 +975,7 @@ static void handle_input(passport_input_result_t input) {
             rebuild();
         } else if (input.key == BSP_BTN_OK) {
             s_return_page = s_page;
-            if (s_page == PAGE_CODEX || s_page == PAGE_CURSOR || s_page == PAGE_GEMINI || s_page == PAGE_AGENTS) return;
+            if (s_page == PAGE_CODEX || s_page == PAGE_CURSOR || s_page == PAGE_CLAUDE || s_page == PAGE_GEMINI || s_page == PAGE_AGENTS) return;
             s_layer = s_page == PAGE_SETTINGS ?
                 (input.action == PASSPORT_INPUT_DOUBLE ? LAYER_FEATURES : LAYER_SETTINGS) : LAYER_DETAIL;
             s_selection = 0;
@@ -1042,6 +1113,12 @@ static void app_worker(void *unused) {
                 s_cursor = *event.cursor;
                 taskEXIT_CRITICAL(&s_lock);
                 free(event.cursor);
+                last_ui = -1000;
+            } else if (event.type == EVENT_CLAUDE) {
+                taskENTER_CRITICAL(&s_lock);
+                passport_claude_state_apply(&s_claude, event.claude);
+                taskEXIT_CRITICAL(&s_lock);
+                free(event.claude);
                 last_ui = -1000;
             } else if (event.type == EVENT_SAVE) handle_save(event.job);
             else if (event.type == EVENT_SAVED) finish_job(event.job);

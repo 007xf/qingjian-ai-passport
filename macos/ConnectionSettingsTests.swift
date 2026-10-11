@@ -22,6 +22,7 @@ import Foundation
             try verify(unpaired.bridgeArguments(for: [action]) == [action])
         }
         try verify(unpaired.bridgeArguments(for: ["sources-status"]) == ["sources-status"])
+        try verify(unpaired.bridgeArguments(for: ["claude-usage"]) == ["claude-usage"])
         try verify(unpaired.bridgeArguments(for: ["sources-configure", "--provider", "cursor"]) == ["sources-configure", "--provider", "cursor"])
         try verify(ble.bridgeArguments(for: ["reset-cycle", "--reason", "manual_reset_card"]) == ["reset-cycle", "--reason", "manual_reset_card"])
         try verify(usb.bridgeArguments(for: ["pair"]) == ["pair"])

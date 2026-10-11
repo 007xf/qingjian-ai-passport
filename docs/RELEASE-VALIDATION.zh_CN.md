@@ -1,6 +1,20 @@
 [English](RELEASE-VALIDATION.md) · **简体中文**
 
-# 发行验证 — 1.4.0，Mac 构建 12
+# 发行验证
+
+## 1.5.0，Mac 构建 13 — 社区测试版
+
+- Build：PASS。对应源码的 ESP-IDF 5.5.3 CI 与受保护布局检查通过。应用 2367872 字节，合并镜像 2433408 字节；arm64/macOS 14+ 编译、48 个 Mach-O 签名及 App 完整性检查通过。
+- Host tests：PASS。完整静态检查含 432 项 Python 测试、全部 C 模型／协议／存储／游戏／布局检查及 Swift 显示／配置／路由回归。9 项串口测试实际执行，无跳过。
+- 发行包：PASS。解压换路径、内置运行库导入、13 个 Backend 模块与源码逐文件一致、匿名 Claude Token／额度验证通过。公开包排除账户缓存、复制凭据和设备身份。
+- Device tests：NOT RUN。1.5.0 尚无新页面、USB／蓝牙或真实订阅账户验收；其他 Mac 和旧系统版本仍未验证。本版为社区测试版，使用本地临时签名，未经 Apple 公证。
+- 固件源码：`8280b1aa181caf418b93521ba8aca5f8b19b8326`；后续仅修改 Mac 额度收集器与发行文档，固件源码相同。Mac 包对应 `f725d6774a2986e788e1e6c0b4aa10885b86b10e`。[固件 CI](https://github.com/007xf/qingjian-ai-passport/actions/runs/38120921819)。
+- 合并固件：`qingjian-1.5.0-full.bin`，地址 `0x0`，SHA-256 `92bd8fad67309cb69f5a173855bfab3fbca5b8e4893f65fffcd0c1d8891c4f8d`。
+- 应用固件：`qingjian-1.5.0-app.bin`，地址 `0x10000`，SHA-256 `3bf354e235902c810b1ac6f9a20dd16838438c4b58feb2d921c706384217f58f`。
+- Mac 包：`qingjian-1.5.0-macos-arm64.zip`，46406177 字节，SHA-256 `04f65f11283701c2111a46bfc20603b4efbd2d7645f67286db73e90e4be68221`。
+
+
+## 历史 1.4.0，Mac 构建 12
 
 - Build：PASS。ESP-IDF 5.5.3 固件构建与保护区布局检查通过。应用段 2,336,816 字节，低于 3 MB；完整合并镜像 2,402,352 字节。Mac 原生编译与 App 签名完整性检查通过。
 - Host tests：PASS。366 项 Python 测试覆盖桥接、后台独占连接与重试、独立 Token 周期、Cursor 整周期汇总、过期缓存及既有接入；另有原生配置、连接路由、额度时间与显示边界，以及 C 模型、协议、游戏与布局测试。

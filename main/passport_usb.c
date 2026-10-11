@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include "passport.h"
 #include "passport_wire.h"
+#include "passport_claude_wire.h"
 #include "passport_avatar.h"
 #include "passport_assets.h"
 #include "driver/usb_serial_jtag.h"
@@ -27,7 +28,7 @@
  * avatar transactions. Connection epochs prevent old BLE replies reaching a
  * newly connected central. Callbacks only enqueue bounded byte packets. */
 #define BLE_RX_MAX 512
-#define RESPONSE_MAX 2560
+#define RESPONSE_MAX 3072
 
 typedef struct {
     bool ble;
@@ -85,6 +86,7 @@ static void status(void)
     cJSON *o = cJSON_CreateObject();
     if (!o) { output("@AP ERROR memory\n"); return; }
     cJSON_AddNumberToObject(o, "protocol", 1);
+    cJSON_AddStringToObject(o, "firmware_version", PASSPORT_FIRMWARE_VERSION);
     uint8_t mac[6]; char device_id[13];
     if (esp_efuse_mac_get_default(mac) == ESP_OK) {
         snprintf(device_id, sizeof(device_id), "%02X%02X%02X%02X%02X%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
@@ -146,6 +148,14 @@ static void status(void)
     cJSON_AddBoolToObject(o, "codex_ready", s.codex_ready);
     cJSON_AddBoolToObject(o, "codex_stale", s.codex_stale);
     cJSON_AddBoolToObject(o, "cursor_quota_supported", true);
+    cJSON_AddBoolToObject(o, "claude_dashboard_supported", true);
+    cJSON_AddBoolToObject(o, "claude_enabled", s.claude_enabled);
+    cJSON_AddNumberToObject(o, "claude_observed_utc_ms", (double)s.claude_observed_utc_ms);
+    cJSON_AddNumberToObject(o, "claude_quota_observed_utc_ms", (double)s.claude_quota_observed_utc_ms);
+    cJSON_AddBoolToObject(o, "claude_tokens_ready", s.claude_tokens_ready);
+    cJSON_AddBoolToObject(o, "claude_tokens_stale", s.claude_tokens_stale);
+    cJSON_AddBoolToObject(o, "claude_quota_ready", s.claude_quota_ready);
+    cJSON_AddBoolToObject(o, "claude_quota_stale", s.claude_quota_stale);
     cJSON_AddNumberToObject(o, "cursor_quota_observed_utc_ms", (double)s.cursor_quota_observed_utc_ms);
     cJSON_AddNumberToObject(o, "cursor_quota_reset_at_ms", (double)s.cursor_quota_reset_at_ms);
     cJSON_AddStringToObject(o, "cursor_quota_plan", s.cursor_quota_plan);
@@ -318,6 +328,17 @@ static const char *json_text(const cJSON *object, const char *key) {
     return cJSON_IsString(value) ? value->valuestring : NULL;
 }
 
+static void claude(const char *encoded) {
+    unsigned char decoded[512];
+    size_t size = 0;
+    passport_claude_snapshot_t snapshot;
+    bool enabled_present, enabled;
+    bool ok = mbedtls_base64_decode(decoded, sizeof(decoded), &size,
+        (const unsigned char *)encoded, strlen(encoded)) == 0 &&
+        passport_claude_wire_parse(decoded, size, &snapshot, &enabled_present, &enabled);
+    reply("CLAUDE", ok && passport_set_claude(&snapshot, enabled_present, enabled));
+}
+
 static void provider(const char *encoded) {
     unsigned char decoded[700]; size_t size = 0;
     bool ok = mbedtls_base64_decode(decoded, sizeof(decoded)-1, &size,
@@ -362,6 +383,7 @@ static void command(const char *line)
     if (!strcmp(line, "@AP PAIR")) { reply("PAIR", !s_peer->ble && passport_request_pairing()); return; }
     if (!strncmp(line, "@AP CODEX ", 10)) { codex(line + 10); return; }
     if (!strncmp(line, "@AP CURSOR ", 11)) { cursor(line + 11); return; }
+    if (!strncmp(line, "@AP CLAUDE ", 11)) { claude(line + 11); return; }
     if (!strncmp(line, "@AP THRESHOLDS ", 15)) {
         char *end; errno = 0;
         uint64_t first = strtoull(line + 15, &end, 10);

@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- Qingjian 1.5.0 (Mac build 13) adds Claude Code local-day/history recorded Tokens and documented status-line subscription quota, an optional USB/BLE badge page, guarded preservation of an existing status line, anonymous profile/identity isolation, and independent source timestamps. Claude does not change Codex + Cursor growth. See [Claude setup and boundaries](qingjian-claude.md); new firmware/package and device acceptance are separate validation stages.
+
+- Isolated malformed Codex counter records and logs moved during inventory so other sessions remain readable. Inventory limits now retain the newest omitted-file time, preventing a partial cycle count from being presented as complete growth.
+
 - Reduced background wakeups, added selectable minute/hour sync and silent UI refresh, and release the process-scoped idle-sleep assertion after a badge is offline for 90 seconds. A verified blank CW2017 is initialized once with the existing 520mAh profile; nonempty profiles are preserved.
 
 - Added an opt-in Mac background sync service with a single USB/BLE owner, reconnect backoff for the selected badge, preserved last-reading timestamps and an optional display-off keep-awake setting. Growth now adds actual Codex current-cycle Tokens to Cursor account-month Tokens, including cached input under each source's counting rules; unavailable sources do not become zero. See [background sync and growth accounting](qingjian-background-sync.md) for USB-only image updates, system-sleep limits and the Mac-only scope. New hardware acceptance remains separate from host tests.

@@ -322,16 +322,21 @@ class ServiceContractTests(unittest.TestCase):
         response = queue.Queue()
         server.jobs.put(({"id": "first", "command": "upload", "config": str(self.root / "draft.json")}, response, time.monotonic() + 10))
         worker = threading.Thread(target=server.work)
-        worker.start()
-        result = response.get(timeout=2)
-        self.assertFalse(result["ok"])
-        self.fake.failure = None
-        self.now += 3
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not self.owner.view().get("connected"):
-            time.sleep(0.05)
-        server.stop.set()
-        worker.join(timeout=3)
+        # The production idle delay is two seconds, exactly the old test's
+        # deadline. A busy runner could stop the worker before its first tick.
+        with mock.patch.object(service, "OWNER_IDLE_SECONDS", 0.01):
+            worker.start()
+            try:
+                result = response.get(timeout=2)
+                self.assertFalse(result["ok"])
+                self.fake.failure = None
+                self.now += 3
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and not any(x[0] == "sync" for x in self.fake.calls):
+                    time.sleep(0.01)
+            finally:
+                server.stop.set()
+                worker.join(timeout=3)
         self.assertFalse(worker.is_alive())
         self.assertEqual(len([x for x in self.fake.calls if x[0] == "upload"]), 1)
         self.assertEqual(len([x for x in self.fake.calls if x[0] == "sync"]), 1)
